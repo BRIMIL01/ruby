@@ -227,10 +227,10 @@ ossl_x509name_to_a(VALUE self)
 {
     X509_NAME *name;
     X509_NAME_ENTRY *entry;
-    int i,entries;
+    int i,entries,nid;
     char long_name[512];
     const char *short_name;
-    VALUE ary, ret;
+    VALUE ary, vname, ret;
 
     GetX509Name(self, name);
     entries = X509_NAME_entry_count(name);
@@ -246,8 +246,15 @@ ossl_x509name_to_a(VALUE self)
 	if (!i2t_ASN1_OBJECT(long_name, sizeof(long_name), entry->object)) {
 	    ossl_raise(eX509NameError, NULL);
 	}
-	short_name = OBJ_nid2sn(OBJ_ln2nid(long_name));
-	ary = rb_ary_new3(3, rb_str_new2(short_name),
+	nid = OBJ_ln2nid(long_name);
+	if (nid == NID_undef) {
+	    vname = rb_str_new2((const char *) &long_name);
+	} else {
+	    short_name = OBJ_nid2sn(nid);
+	    vname = rb_str_new2(short_name); /*do not free*/
+	}
+	ary = rb_ary_new3(3,
+			  vname,
         		  rb_str_new((const char *)entry->value->data, entry->value->length),
         		  INT2FIX(entry->value->type));
 	rb_ary_push(ret, ary);
@@ -317,6 +324,27 @@ ossl_x509name_hash(VALUE self)
     return ULONG2NUM(hash);
 }
 
+#ifdef HAVE_X509_NAME_HASH_OLD
+/*
+ * call-seq:
+ *    name.hash_old => integer
+ *
+ * hash_old returns MD5 based hash used in OpenSSL 0.9.X.
+ */
+static VALUE
+ossl_x509name_hash_old(VALUE self)
+{
+    X509_NAME *name;
+    unsigned long hash;
+
+    GetX509Name(self, name);
+
+    hash = X509_NAME_hash_old(name);
+
+    return ULONG2NUM(hash);
+}
+#endif
+
 /*
  * call-seq:
  *    name.to_der => string
@@ -364,6 +392,9 @@ Init_ossl_x509name()
     rb_define_alias(cX509Name, "<=>", "cmp");
     rb_define_method(cX509Name, "eql?", ossl_x509name_eql, 1);
     rb_define_method(cX509Name, "hash", ossl_x509name_hash, 0);
+#ifdef HAVE_X509_NAME_HASH_OLD
+    rb_define_method(cX509Name, "hash_old", ossl_x509name_hash_old, 0);
+#endif
     rb_define_method(cX509Name, "to_der", ossl_x509name_to_der, 0);
 
     utf8str = INT2NUM(V_ASN1_UTF8STRING);

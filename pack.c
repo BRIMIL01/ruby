@@ -88,27 +88,27 @@ TOKEN_PASTE(swap,x)(xtype z)		\
 #endif
 
 #ifndef swap16
-# define swap16(x)	((((x)&0xFF)<<8) | (((x)>>8)&0xFF))
+# define swap16(x)	((uint16_t)((((x)&0xFF)<<8) | (((x)>>8)&0xFF)))
 #endif
 
 #ifndef swap32
-# define swap32(x)	((((x)&0xFF)<<24)	\
+# define swap32(x)	((uint32_t)((((x)&0xFF)<<24)	\
 			|(((x)>>24)&0xFF)	\
 			|(((x)&0x0000FF00)<<8)	\
-			|(((x)&0x00FF0000)>>8)	)
+			|(((x)&0x00FF0000)>>8)	))
 #endif
 
 #ifndef swap64
 # ifdef HAVE_INT64_T
 #  define byte_in_64bit(n) ((uint64_t)0xff << (n))
-#  define swap64(x)       ((((x)&byte_in_64bit(0))<<56) 	\
+#  define swap64(x)       ((uint64_t)((((x)&byte_in_64bit(0))<<56) 	\
 			   |(((x)>>56)&0xFF)	                \
 			   |(((x)&byte_in_64bit(8))<<40)	\
 			   |(((x)&byte_in_64bit(48))>>40)	\
 			   |(((x)&byte_in_64bit(16))<<24)	\
 			   |(((x)&byte_in_64bit(40))>>24)	\
 			   |(((x)&byte_in_64bit(24))<<8)	\
-			   |(((x)&byte_in_64bit(32))>>8))
+			   |(((x)&byte_in_64bit(32))>>8)))
 # endif
 #endif
 
@@ -243,11 +243,12 @@ num2i32(VALUE x)
     x = rb_to_int(x); /* is nil OK? (should not) */
 
     if (FIXNUM_P(x)) return FIX2LONG(x);
-    if (TYPE(x) == T_BIGNUM) {
+    if (RB_TYPE_P(x, T_BIGNUM)) {
 	return rb_big2ulong_pack(x);
     }
     rb_raise(rb_eTypeError, "can't convert %s to `integer'", rb_obj_classname(x));
-    return 0;			/* not reached */
+
+    UNREACHABLE;
 }
 
 #define MAX_INTEGER_PACK_SIZE 8
@@ -378,7 +379,7 @@ pack_pack(VALUE ary, VALUE fmt)
 #ifdef NATINT_PACK
     int natint;		/* native integer */
 #endif
-    int signed_p, integer_size, bigendian_p;
+    int integer_size, bigendian_p;
 
     StringValue(fmt);
     p = RSTRING_PTR(fmt);
@@ -511,6 +512,8 @@ pack_pack(VALUE ary, VALUE fmt)
 		}
 		break;
 
+#define castchar(from) (char)((from) & 0xff)
+
 	      case 'b':		/* bit string (ascending) */
 		{
 		    int byte = 0;
@@ -526,7 +529,7 @@ pack_pack(VALUE ary, VALUE fmt)
 			if (i & 7)
 			    byte >>= 1;
 			else {
-			    char c = byte & 0xff;
+			    char c = castchar(byte);
 			    rb_str_buf_cat(res, &c, 1);
 			    byte = 0;
 			}
@@ -534,7 +537,7 @@ pack_pack(VALUE ary, VALUE fmt)
 		    if (len & 7) {
 			char c;
 			byte >>= 7 - (len & 7);
-			c = byte & 0xff;
+			c = castchar(byte);
 			rb_str_buf_cat(res, &c, 1);
 		    }
 		    len = j;
@@ -556,7 +559,7 @@ pack_pack(VALUE ary, VALUE fmt)
 			if (i & 7)
 			    byte <<= 1;
 			else {
-			    char c = byte & 0xff;
+			    char c = castchar(byte);
 			    rb_str_buf_cat(res, &c, 1);
 			    byte = 0;
 			}
@@ -564,7 +567,7 @@ pack_pack(VALUE ary, VALUE fmt)
 		    if (len & 7) {
 			char c;
 			byte <<= 7 - (len & 7);
-			c = byte & 0xff;
+			c = castchar(byte);
 			rb_str_buf_cat(res, &c, 1);
 		    }
 		    len = j;
@@ -589,13 +592,13 @@ pack_pack(VALUE ary, VALUE fmt)
 			if (i & 1)
 			    byte >>= 4;
 			else {
-			    char c = byte & 0xff;
+			    char c = castchar(byte);
 			    rb_str_buf_cat(res, &c, 1);
 			    byte = 0;
 			}
 		    }
 		    if (len & 1) {
-			char c = byte & 0xff;
+			char c = castchar(byte);
 			rb_str_buf_cat(res, &c, 1);
 		    }
 		    len = j;
@@ -620,13 +623,13 @@ pack_pack(VALUE ary, VALUE fmt)
 			if (i & 1)
 			    byte <<= 4;
 			else {
-			    char c = byte & 0xff;
+			    char c = castchar(byte);
 			    rb_str_buf_cat(res, &c, 1);
 			    byte = 0;
 			}
 		    }
 		    if (len & 1) {
-			char c = byte & 0xff;
+			char c = castchar(byte);
 			rb_str_buf_cat(res, &c, 1);
 		    }
 		    len = j;
@@ -648,73 +651,61 @@ pack_pack(VALUE ary, VALUE fmt)
 	    break;
 
 	  case 's':		/* signed short */
-            signed_p = 1;
             integer_size = NATINT_LEN(short, 2);
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'S':		/* unsigned short */
-            signed_p = 0;
             integer_size = NATINT_LEN(short, 2);
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'i':		/* signed int */
-            signed_p = 1;
             integer_size = (int)sizeof(int);
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'I':		/* unsigned int */
-            signed_p = 0;
             integer_size = (int)sizeof(int);
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'l':		/* signed long */
-            signed_p = 1;
             integer_size = NATINT_LEN(long, 4);
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'L':		/* unsigned long */
-            signed_p = 0;
             integer_size = NATINT_LEN(long, 4);
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'q':		/* signed quad (64bit) int */
-            signed_p = 1;
 	    integer_size = 8;
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'Q':		/* unsigned quad (64bit) int */
-            signed_p = 0;
 	    integer_size = 8;
             bigendian_p = BIGENDIAN_P();
             goto pack_integer;
 
 	  case 'n':		/* unsigned short (network byte-order)  */
-            signed_p = 0;
             integer_size = 2;
             bigendian_p = 1;
             goto pack_integer;
 
 	  case 'N':		/* unsigned long (network byte-order) */
-            signed_p = 0;
             integer_size = 4;
             bigendian_p = 1;
             goto pack_integer;
 
 	  case 'v':		/* unsigned short (VAX byte-order) */
-            signed_p = 0;
             integer_size = 2;
             bigendian_p = 0;
             goto pack_integer;
 
 	  case 'V':		/* unsigned long (VAX byte-order) */
-            signed_p = 0;
             integer_size = 4;
             bigendian_p = 0;
             goto pack_integer;
@@ -936,6 +927,8 @@ pack_pack(VALUE ary, VALUE fmt)
 	    }
 	    if (len <= 2)
 		len = 45;
+	    else if (len > 63 && type == 'u')
+		len = 63;
 	    else
 		len = len / 3 * 3;
 	    while (plen > 0) {
@@ -995,11 +988,11 @@ pack_pack(VALUE ary, VALUE fmt)
 		char c, *bufs, *bufe;
 
 		from = NEXTFROM;
-		if (TYPE(from) == T_BIGNUM) {
+		if (RB_TYPE_P(from, T_BIGNUM)) {
 		    VALUE big128 = rb_uint2big(128);
-		    while (TYPE(from) == T_BIGNUM) {
+		    while (RB_TYPE_P(from, T_BIGNUM)) {
 			from = rb_big_divmod(from, big128);
-			c = NUM2INT(RARRAY_PTR(from)[1]) | 0x80; /* mod */
+			c = castchar(NUM2INT(RARRAY_PTR(from)[1]) | 0x80); /* mod */
 			rb_str_buf_cat(buf, &c, sizeof(char));
 			from = RARRAY_PTR(from)[0]; /* div */
 		    }
@@ -1014,7 +1007,7 @@ pack_pack(VALUE ary, VALUE fmt)
 		}
 
 		while (ul) {
-		    c = (char)(ul & 0x7f) | 0x80;
+		    c = castchar((ul & 0x7f) | 0x80);
 		    rb_str_buf_cat(buf, &c, sizeof(char));
 		    ul >>=  7;
 		}
@@ -1038,6 +1031,8 @@ pack_pack(VALUE ary, VALUE fmt)
 	    break;
 
 	  default:
+	    rb_warning("unknown pack directive '%c' in '%s'",
+		type, RSTRING_PTR(fmt));
 	    break;
 	}
     }
@@ -1071,7 +1066,7 @@ encodes(VALUE str, const char *s, long len, int type, int tail_lf)
     char buff[4096];
     long i = 0;
     const char *trans = type == 'u' ? uu_table : b64_table;
-    int padding;
+    char padding;
 
     if (type == 'u') {
 	buff[i++] = (char)len + ' ';
@@ -1934,7 +1929,7 @@ pack_unpack(VALUE str, VALUE fmt)
 			b64_xtable[i] = -1;
 		    }
 		    for (i = 0; i < 64; i++) {
-			b64_xtable[(unsigned char)b64_table[i]] = i;
+			b64_xtable[(unsigned char)b64_table[i]] = (char)i;
 		    }
 		}
 		if (len == 0) {
@@ -1953,17 +1948,17 @@ pack_unpack(VALUE str, VALUE fmt)
 			if (s + 1 == send && *s == '=') break;
 			d = b64_xtable[(unsigned char)*s++];
 			if (d == -1) rb_raise(rb_eArgError, "invalid base64");
-			*ptr++ = a << 2 | b >> 4;
-			*ptr++ = b << 4 | c >> 2;
-			*ptr++ = c << 6 | d;
+			*ptr++ = castchar(a << 2 | b >> 4);
+			*ptr++ = castchar(b << 4 | c >> 2);
+			*ptr++ = castchar(c << 6 | d);
 		    }
 		    if (c == -1) {
-			*ptr++ = a << 2 | b >> 4;
+			*ptr++ = castchar(a << 2 | b >> 4);
 			if (b & 0xf) rb_raise(rb_eArgError, "invalid base64");
 		    }
 		    else if (d == -1) {
-			*ptr++ = a << 2 | b >> 4;
-			*ptr++ = b << 4 | c >> 2;
+			*ptr++ = castchar(a << 2 | b >> 4);
+			*ptr++ = castchar(b << 4 | c >> 2);
 			if (c & 0x3) rb_raise(rb_eArgError, "invalid base64");
 		    }
 		}
@@ -1982,16 +1977,16 @@ pack_unpack(VALUE str, VALUE fmt)
 			while ((d = b64_xtable[(unsigned char)*s]) == -1 && s < send) {if (*s == '=') break; s++;}
 			if (*s == '=' || s >= send) break;
 			s++;
-			*ptr++ = a << 2 | b >> 4;
-			*ptr++ = b << 4 | c >> 2;
-			*ptr++ = c << 6 | d;
+			*ptr++ = castchar(a << 2 | b >> 4);
+			*ptr++ = castchar(b << 4 | c >> 2);
+			*ptr++ = castchar(c << 6 | d);
 		    }
 		    if (a != -1 && b != -1) {
 			if (c == -1 && *s == '=')
-			    *ptr++ = a << 2 | b >> 4;
+			    *ptr++ = castchar(a << 2 | b >> 4);
 			else if (c != -1 && *s == '=') {
-			    *ptr++ = a << 2 | b >> 4;
-			    *ptr++ = b << 4 | c >> 2;
+			    *ptr++ = castchar(a << 2 | b >> 4);
+			    *ptr++ = castchar(b << 4 | c >> 2);
 			}
 		    }
 		}
@@ -2003,27 +1998,29 @@ pack_unpack(VALUE str, VALUE fmt)
 	  case 'M':
 	    {
 		VALUE buf = infected_str_new(0, send - s, str);
-		char *ptr = RSTRING_PTR(buf);
+		char *ptr = RSTRING_PTR(buf), *ss = s;
 		int c1, c2;
 
 		while (s < send) {
 		    if (*s == '=') {
 			if (++s == send) break;
-                       if (s+1 < send && *s == '\r' && *(s+1) == '\n')
-                         s++;
+			if (s+1 < send && *s == '\r' && *(s+1) == '\n')
+			    s++;
 			if (*s != '\n') {
 			    if ((c1 = hex2num(*s)) == -1) break;
 			    if (++s == send) break;
 			    if ((c2 = hex2num(*s)) == -1) break;
-			    *ptr++ = c1 << 4 | c2;
+			    *ptr++ = castchar(c1 << 4 | c2);
 			}
 		    }
 		    else {
 			*ptr++ = *s;
 		    }
 		    s++;
+		    ss = s;
 		}
 		rb_str_set_len(buf, ptr - RSTRING_PTR(buf));
+		rb_str_buf_cat(buf, ss, send-ss);
 		ENCODING_CODERANGE_SET(buf, rb_ascii8bit_encindex(), ENC_CODERANGE_VALID);
 		UNPACK_PUSH(buf);
 	    }
@@ -2064,7 +2061,7 @@ pack_unpack(VALUE str, VALUE fmt)
 		    p = RARRAY_PTR(a);
 		    pend = p + RARRAY_LEN(a);
 		    while (p < pend) {
-			if (TYPE(*p) == T_STRING && RSTRING_PTR(*p) == t) {
+			if (RB_TYPE_P(*p, T_STRING) && RSTRING_PTR(*p) == t) {
 			    if (len < RSTRING_LEN(*p)) {
 				tmp = rb_tainted_str_new(t, len);
 				rb_str_associate(tmp, a);
@@ -2106,7 +2103,7 @@ pack_unpack(VALUE str, VALUE fmt)
 			p = RARRAY_PTR(a);
 			pend = p + RARRAY_LEN(a);
 			while (p < pend) {
-			    if (TYPE(*p) == T_STRING && RSTRING_PTR(*p) == t) {
+			    if (RB_TYPE_P(*p, T_STRING) && RSTRING_PTR(*p) == t) {
 				tmp = *p;
 				break;
 			    }
@@ -2153,6 +2150,8 @@ pack_unpack(VALUE str, VALUE fmt)
 	    break;
 
 	  default:
+	    rb_warning("unknown unpack directive '%c' in '%s'",
+		type, RSTRING_PTR(fmt));
 	    break;
 	}
     }
@@ -2170,41 +2169,43 @@ rb_uv_to_utf8(char buf[6], unsigned long uv)
 	return 1;
     }
     if (uv <= 0x7ff) {
-	buf[0] = (char)((uv>>6)&0xff)|0xc0;
-	buf[1] = (char)(uv&0x3f)|0x80;
+	buf[0] = castchar(((uv>>6)&0xff)|0xc0);
+	buf[1] = castchar((uv&0x3f)|0x80);
 	return 2;
     }
     if (uv <= 0xffff) {
-	buf[0] = (char)((uv>>12)&0xff)|0xe0;
-	buf[1] = (char)((uv>>6)&0x3f)|0x80;
-	buf[2] = (char)(uv&0x3f)|0x80;
+	buf[0] = castchar(((uv>>12)&0xff)|0xe0);
+	buf[1] = castchar(((uv>>6)&0x3f)|0x80);
+	buf[2] = castchar((uv&0x3f)|0x80);
 	return 3;
     }
     if (uv <= 0x1fffff) {
-	buf[0] = (char)((uv>>18)&0xff)|0xf0;
-	buf[1] = (char)((uv>>12)&0x3f)|0x80;
-	buf[2] = (char)((uv>>6)&0x3f)|0x80;
-	buf[3] = (char)(uv&0x3f)|0x80;
+	buf[0] = castchar(((uv>>18)&0xff)|0xf0);
+	buf[1] = castchar(((uv>>12)&0x3f)|0x80);
+	buf[2] = castchar(((uv>>6)&0x3f)|0x80);
+	buf[3] = castchar((uv&0x3f)|0x80);
 	return 4;
     }
     if (uv <= 0x3ffffff) {
-	buf[0] = (char)((uv>>24)&0xff)|0xf8;
-	buf[1] = (char)((uv>>18)&0x3f)|0x80;
-	buf[2] = (char)((uv>>12)&0x3f)|0x80;
-	buf[3] = (char)((uv>>6)&0x3f)|0x80;
-	buf[4] = (char)(uv&0x3f)|0x80;
+	buf[0] = castchar(((uv>>24)&0xff)|0xf8);
+	buf[1] = castchar(((uv>>18)&0x3f)|0x80);
+	buf[2] = castchar(((uv>>12)&0x3f)|0x80);
+	buf[3] = castchar(((uv>>6)&0x3f)|0x80);
+	buf[4] = castchar((uv&0x3f)|0x80);
 	return 5;
     }
     if (uv <= 0x7fffffff) {
-	buf[0] = (char)((uv>>30)&0xff)|0xfc;
-	buf[1] = (char)((uv>>24)&0x3f)|0x80;
-	buf[2] = (char)((uv>>18)&0x3f)|0x80;
-	buf[3] = (char)((uv>>12)&0x3f)|0x80;
-	buf[4] = (char)((uv>>6)&0x3f)|0x80;
-	buf[5] = (char)(uv&0x3f)|0x80;
+	buf[0] = castchar(((uv>>30)&0xff)|0xfc);
+	buf[1] = castchar(((uv>>24)&0x3f)|0x80);
+	buf[2] = castchar(((uv>>18)&0x3f)|0x80);
+	buf[3] = castchar(((uv>>12)&0x3f)|0x80);
+	buf[4] = castchar(((uv>>6)&0x3f)|0x80);
+	buf[5] = castchar((uv&0x3f)|0x80);
 	return 6;
     }
     rb_raise(rb_eRangeError, "pack(U): value out of range");
+
+    UNREACHABLE;
 }
 
 static const unsigned long utf8_limits[] = {

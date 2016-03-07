@@ -2,43 +2,45 @@ require 'test/unit'
 require 'timeout'
 require 'tmpdir'
 require 'tempfile'
+require 'fileutils'
 require_relative 'envutil'
 
 class TestArgf < Test::Unit::TestCase
   def setup
-    @t1 = Tempfile.new("argf-foo")
+    @tmpdir = Dir.mktmpdir
+    @tmp_count = 0
+    @t1 = make_tempfile0("argf-foo")
     @t1.binmode
     @t1.puts "1"
     @t1.puts "2"
     @t1.close
-    @t2 = Tempfile.new("argf-bar")
+    @t2 = make_tempfile0("argf-bar")
     @t2.binmode
     @t2.puts "3"
     @t2.puts "4"
     @t2.close
-    @t3 = Tempfile.new("argf-baz")
+    @t3 = make_tempfile0("argf-baz")
     @t3.binmode
     @t3.puts "5"
     @t3.puts "6"
     @t3.close
-    @tmps = [@t1, @t2, @t3]
   end
 
   def teardown
-    @tmps.each {|t|
-      bak = t.path + ".bak"
-      File.unlink bak if File.file? bak
-      t.close(true)
-    }
+    FileUtils.rmtree(@tmpdir)
+  end
+
+  def make_tempfile0(basename)
+    @tmp_count += 1
+    open("#{@tmpdir}/#{basename}-#{@tmp_count}", "w")
   end
 
   def make_tempfile
-    t = Tempfile.new("argf-qux")
+    t = make_tempfile0("argf-qux")
     t.puts "foo"
     t.puts "bar"
     t.puts "baz"
     t.close
-    @tmps << t
     t
   end
 
@@ -201,21 +203,14 @@ class TestArgf < Test::Unit::TestCase
     t = make_tempfile
 
     assert_in_out_err(["-", t.path], <<-INPUT) do |r, e|
-      ARGF.inplace_mode = '/\\\\'
+      ARGF.inplace_mode = '/\\\\:'
       while line = ARGF.gets
         puts line.chomp + '.new'
       end
     INPUT
-      if no_safe_rename
-        assert_equal([], e)
-        assert_equal([], r)
-        assert_equal("foo.new\nbar.new\nbaz.new\n", File.read(t.path))
-        File.unlink(t.path + ".~~~") rescue nil
-      else
-        assert_match(/Can't rename .* to .*: .*. skipping file/, e.first) #'
-        assert_equal([], r)
-        assert_equal("foo\nbar\nbaz\n", File.read(t.path))
-      end
+      assert_match(/Can't rename .* to .*: .*. skipping file/, e.first) #'
+      assert_equal([], r)
+      assert_equal("foo\nbar\nbaz\n", File.read(t.path))
     end
   end
 
@@ -424,11 +419,11 @@ class TestArgf < Test::Unit::TestCase
       end
     end
 
-    t1 = Tempfile.new("argf-foo")
+    t1 = open("#{@tmpdir}/argf-hoge", "w")
     t1.binmode
     t1.puts "foo"
     t1.close
-    t2 = Tempfile.new("argf-bar")
+    t2 = open("#{@tmpdir}/argf-moge", "w")
     t2.binmode
     t2.puts "bar"
     t2.close
@@ -453,6 +448,16 @@ class TestArgf < Test::Unit::TestCase
     end
   end
 
+  def test_read2_with_not_empty_buffer
+    ruby('-e', <<-SRC, @t1.path, @t2.path, @t3.path) do |f|
+      s = "0123456789"
+      ARGF.read(8, s)
+      p s
+    SRC
+      assert_equal("\"1\\n2\\n3\\n4\\n\"\n", f.read)
+    end
+  end
+
   def test_read3
     ruby('-e', <<-SRC, @t1.path, @t2.path, @t3.path) do |f|
       nil while ARGF.gets
@@ -470,6 +475,8 @@ class TestArgf < Test::Unit::TestCase
         loop do
           s << ARGF.readpartial(1)
           t = ""; ARGF.readpartial(1, t); s << t
+          # not empty buffer
+          u = "abcdef"; ARGF.readpartial(1, u); s << u
         end
       rescue EOFError
         puts s
@@ -648,11 +655,22 @@ class TestArgf < Test::Unit::TestCase
   end
 
   def test_binmode
+    bug5268 = '[ruby-core:39234]'
+    open(@t3.path, "wb") {|f| f.write "5\r\n6\r\n"}
     ruby('-e', "ARGF.binmode; STDOUT.binmode; puts ARGF.read", @t1.path, @t2.path, @t3.path) do |f|
       f.binmode
-      assert_equal("1\n2\n3\n4\n5\n6\n", f.read)
+      assert_equal("1\n2\n3\n4\n5\r\n6\r\n", f.read, bug5268)
     end
   end
+
+  def test_textmode
+    bug5268 = '[ruby-core:39234]'
+    open(@t3.path, "wb") {|f| f.write "5\r\n6\r\n"}
+    ruby('-e', "STDOUT.binmode; puts ARGF.read", @t1.path, @t2.path, @t3.path) do |f|
+      f.binmode
+      assert_equal("1\n2\n3\n4\n5\n6\n", f.read, bug5268)
+    end
+  end unless IO::BINARY.zero?
 
   def test_skip
     ruby('-e', <<-SRC, @t1.path, @t2.path, @t3.path) do |f|
@@ -671,6 +689,16 @@ class TestArgf < Test::Unit::TestCase
       puts ARGF.read
     SRC
       assert_equal("3\n4\n5\n6\n", f.read)
+    end
+  end
+
+  def test_close_replace
+    ruby('-e', <<-SRC) do |f|
+      ARGF.close
+      ARGV.replace ['#{@t1.path}', '#{@t2.path}', '#{@t3.path}']
+      puts ARGF.read
+    SRC
+      assert_equal("1\n2\n3\n4\n5\n6\n", f.read)
     end
   end
 
@@ -736,5 +764,10 @@ class TestArgf < Test::Unit::TestCase
       assert_match(/- #{Regexp.quote(path)}\z/, e.message)
     end
     assert_nil(argf.gets, bug4274)
+  end
+
+  def test_readlines_twice
+    bug5952 = '[ruby-dev:45160]'
+    assert_ruby_status(["-e", "2.times {STDIN.tty?; readlines}"], "", bug5952)
   end
 end

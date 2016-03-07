@@ -3,6 +3,43 @@ require_relative "utils"
 if defined?(OpenSSL)
 
 class OpenSSL::TestSSLSession < OpenSSL::SSLTestCase
+  def test_session_equals
+    session = OpenSSL::SSL::Session.new <<-SESSION
+-----BEGIN SSL SESSION PARAMETERS-----
+MIIDFgIBAQICAwEEAgA5BCCY3pW6iTkPoD5SENuztz/gZjhvey6XnHbsxd22k0Ol
+dgQw8uaN3hCRnlhoIKPWInCFzrp/tQsDRFs9jDjc9pwpy/oKHmJdQQMQA1g8FYnO
+gpdVoQYCBE52ikKiBAICASyjggKOMIICijCCAXKgAwIBAgIBAjANBgkqhkiG9w0B
+AQUFADA9MRMwEQYKCZImiZPyLGQBGRYDb3JnMRkwFwYKCZImiZPyLGQBGRYJcnVi
+eS1sYW5nMQswCQYDVQQDDAJDQTAeFw0xMTA5MTkwMDE4MTBaFw0xMTA5MTkwMDQ4
+MTBaMEQxEzARBgoJkiaJk/IsZAEZFgNvcmcxGTAXBgoJkiaJk/IsZAEZFglydWJ5
+LWxhbmcxEjAQBgNVBAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAw
+gYkCgYEAy8LEsNRApz7U/j5DoB4XBgO9Z8Atv5y/OVQRp0ag8Tqo1YewsWijxEWB
+7JOATwpBN267U4T1nPZIxxEEO7n/WNa2ws9JWsjah8ssEBFSxZqdXKSLf0N4Hi7/
+GQ/aYoaMCiQ8jA4jegK2FJmXM71uPe+jFN/peeBOpRfyXxRFOYcCAwEAAaMSMBAw
+DgYDVR0PAQH/BAQDAgWgMA0GCSqGSIb3DQEBBQUAA4IBAQARC7GP7InX1t7VEXz2
+I8RI57S0/HSJL4fDIYP3zFpitHX1PZeo+7XuzMilvPjjBo/ky9Jzo8TYiY+N+JEz
+mY/A/zPA4ZsJ7KYj6/FEdIc/vRlS0CvsbClbNjw1jl/PoB2FLr2b3uuBcZEsyZeP
+yq154ijq37Ajf8K5Mi5FgshoP41BPtRPj+VVf61rv1IcEnNWdDCS6DR4XsaNC+zt
+G6AqCqkytIXWRuDw6n6vYLF3A/tn2sldLo7/scY0PMDNbo63O/LTxkDHmPhSkD68
+8m9SsMeTR+RCiDEZWFPVcAH/8mDfi+5k8uN3qS+gOU/PPrmHGgl5ykiSFgqs4v61
+tddwpBAEDjcwMzA5NTYzMTU1MzAwpQMCARM=
+-----END SSL SESSION PARAMETERS-----
+    SESSION
+
+    start_server(PORT, OpenSSL::SSL::VERIFY_NONE, true) { |_, port|
+      ctx = OpenSSL::SSL::SSLContext.new
+      ctx.session_cache_mode = OpenSSL::SSL::SSLContext::SESSION_CACHE_CLIENT
+      ctx.session_id_context = self.object_id.to_s
+
+      sock = TCPSocket.new '127.0.0.1', port
+      ssl = OpenSSL::SSL::SSLSocket.new sock, ctx
+      ssl.session = session
+
+      assert_equal session, ssl.session
+      sock.close
+    }
+  end
+
   def test_session
     start_server(PORT, OpenSSL::SSL::VERIFY_NONE, true) do |server, port|
       sock = TCPSocket.new("127.0.0.1", port)
@@ -32,6 +69,85 @@ class OpenSSL::TestSSLSession < OpenSSL::SSLTestCase
       ssl.close
     end
   end
+
+  DUMMY_SESSION = <<__EOS__
+-----BEGIN SSL SESSION PARAMETERS-----
+MIIDzQIBAQICAwEEAgA5BCAF219w9ZEV8dNA60cpEGOI34hJtIFbf3bkfzSgMyad
+MQQwyGLbkCxE4OiMLdKKem+pyh8V7ifoP7tCxhdmwoDlJxI1v6nVCjai+FGYuncy
+NNSWoQYCBE4DDWuiAwIBCqOCAo4wggKKMIIBcqADAgECAgECMA0GCSqGSIb3DQEB
+BQUAMD0xEzARBgoJkiaJk/IsZAEZFgNvcmcxGTAXBgoJkiaJk/IsZAEZFglydWJ5
+LWxhbmcxCzAJBgNVBAMMAkNBMB4XDTExMDYyMzA5NTQ1MVoXDTExMDYyMzEwMjQ1
+MVowRDETMBEGCgmSJomT8ixkARkWA29yZzEZMBcGCgmSJomT8ixkARkWCXJ1Ynkt
+bGFuZzESMBAGA1UEAwwJbG9jYWxob3N0MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCB
+iQKBgQDLwsSw1ECnPtT+PkOgHhcGA71nwC2/nL85VBGnRqDxOqjVh7CxaKPERYHs
+k4BPCkE3brtThPWc9kjHEQQ7uf9Y1rbCz0layNqHyywQEVLFmp1cpIt/Q3geLv8Z
+D9pihowKJDyMDiN6ArYUmZczvW4976MU3+l54E6lF/JfFEU5hwIDAQABoxIwEDAO
+BgNVHQ8BAf8EBAMCBaAwDQYJKoZIhvcNAQEFBQADggEBACj5WhoZ/ODVeHpwgq1d
+8fW/13ICRYHYpv6dzlWihyqclGxbKMlMnaVCPz+4JaVtMz3QB748KJQgL3Llg3R1
+ek+f+n1MBCMfFFsQXJ2gtLB84zD6UCz8aaCWN5/czJCd7xMz7fRLy3TOIW5boXAU
+zIa8EODk+477K1uznHm286ab0Clv+9d304hwmBZgkzLg6+31Of6d6s0E0rwLGiS2
+sOWYg34Y3r4j8BS9Ak4jzpoLY6cJ0QAKCOJCgmjGr4XHpyXMLbicp3ga1uSbwtVO
+gF/gTfpLhJC+y0EQ5x3Ftl88Cq7ZJuLBDMo/TLIfReJMQu/HlrTT7+LwtneSWGmr
+KkSkAgQApQMCAROqgcMEgcAuDkAVfj6QAJMz9yqTzW5wPFyty7CxUEcwKjUqj5UP
+/Yvky1EkRuM/eQfN7ucY+MUvMqv+R8ZSkHPsnjkBN5ChvZXjrUSZKFVjR4eFVz2V
+jismLEJvIFhQh6pqTroRrOjMfTaM5Lwoytr2FTGobN9rnjIRsXeFQW1HLFbXn7Dh
+8uaQkMwIVVSGRB8T7t6z6WIdWruOjCZ6G5ASI5XoqAHwGezhLodZuvJEfsVyCF9y
+j+RBGfCFrrQbBdnkFI/ztgM=
+-----END SSL SESSION PARAMETERS-----
+__EOS__
+
+  DUMMY_SESSION_NO_EXT = <<-__EOS__
+-----BEGIN SSL SESSION PARAMETERS-----
+MIIDCAIBAQICAwAEAgA5BCDyAW7rcpzMjDSosH+Tv6sukymeqgq3xQVVMez628A+
+lAQw9TrKzrIqlHEh6ltuQaqv/Aq83AmaAlogYktZgXAjOGnhX7ifJDNLMuCfQq53
+hPAaoQYCBE4iDeeiBAICASyjggKOMIICijCCAXKgAwIBAgIBAjANBgkqhkiG9w0B
+AQUFADA9MRMwEQYKCZImiZPyLGQBGRYDb3JnMRkwFwYKCZImiZPyLGQBGRYJcnVi
+eS1sYW5nMQswCQYDVQQDDAJDQTAeFw0xMTA3MTYyMjE3MTFaFw0xMTA3MTYyMjQ3
+MTFaMEQxEzARBgoJkiaJk/IsZAEZFgNvcmcxGTAXBgoJkiaJk/IsZAEZFglydWJ5
+LWxhbmcxEjAQBgNVBAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAw
+gYkCgYEAy8LEsNRApz7U/j5DoB4XBgO9Z8Atv5y/OVQRp0ag8Tqo1YewsWijxEWB
+7JOATwpBN267U4T1nPZIxxEEO7n/WNa2ws9JWsjah8ssEBFSxZqdXKSLf0N4Hi7/
+GQ/aYoaMCiQ8jA4jegK2FJmXM71uPe+jFN/peeBOpRfyXxRFOYcCAwEAAaMSMBAw
+DgYDVR0PAQH/BAQDAgWgMA0GCSqGSIb3DQEBBQUAA4IBAQA3TRzABRG3kz8jEEYr
+tDQqXgsxwTsLhTT5d1yF0D8uFw+y15hJAJnh6GJHjqhWBrF4zNoTApFo+4iIL6g3
+q9C3mUsxIVAHx41DwZBh/FI7J4FqlAoGOguu7892CNVY3ZZjc3AXMTdKjcNoWPzz
+FCdj5fNT24JMMe+ZdGZK97ChahJsdn/6B3j6ze9NK9mfYEbiJhejGTPLOFVHJCGR
+KYYZ3ZcKhLDr9ql4d7cCo1gBtemrmFQGPui7GttNEqmXqUKvV8mYoa8farf5i7T4
+L6a/gp2cVZTaDIS1HjbJsA/Ag7AajZqiN6LfqShNUVsrMZ+5CoV8EkBDTZPJ9MSr
+a3EqpAIEAKUDAgET
+-----END SSL SESSION PARAMETERS-----
+__EOS__
+
+
+  def test_session_time
+    sess = OpenSSL::SSL::Session.new(DUMMY_SESSION_NO_EXT)
+    sess.time = (now = Time.now)
+    assert_equal(now.to_i, sess.time.to_i)
+    sess.time = 1
+    assert_equal(1, sess.time.to_i)
+    sess.time = 1.2345
+    assert_equal(1, sess.time.to_i)
+    # Can OpenSSL handle t>2038y correctly? Version?
+    sess.time = 2**31 - 1
+    assert_equal(2**31 - 1, sess.time.to_i)
+  end
+
+  def test_session_timeout
+    sess = OpenSSL::SSL::Session.new(DUMMY_SESSION_NO_EXT)
+    assert_raise(TypeError) do
+      sess.timeout = (now = Time.now)
+    end
+    sess.timeout = 1
+    assert_equal(1, sess.timeout.to_i)
+    sess.timeout = 1.2345
+    assert_equal(1, sess.timeout.to_i)
+    sess.timeout = 2**31 - 1
+    assert_equal(2**31 - 1, sess.timeout.to_i)
+  end
+
+  def test_session_exts_read
+    assert(OpenSSL::SSL::Session.new(DUMMY_SESSION))
+  end if OpenSSL::OPENSSL_VERSION_NUMBER >= 0x009080bf
 
   def test_client_session
     last_session = nil
@@ -235,8 +351,12 @@ class OpenSSL::TestSSLSession < OpenSSL::SSLTestCase
         ssl.connect
         last_client_session = ssl.session
         ssl.close
-        assert(called.delete(:new))
-        assert(called.delete(:remove))
+        timeout(5) do
+          Thread.pass until called.key?(:new)
+          assert(called.delete(:new))
+          Thread.pass until called.key?(:remove)
+          assert(called.delete(:remove))
+        end
       end
     end
     assert(called[:get1])

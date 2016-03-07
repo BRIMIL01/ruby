@@ -38,6 +38,8 @@ static ID ripper_id_tstring_content;
 static ID ripper_id_tstring_end;
 static ID ripper_id_words_beg;
 static ID ripper_id_qwords_beg;
+static ID ripper_id_qsymbols_beg;
+static ID ripper_id_symbols_beg;
 static ID ripper_id_words_sep;
 static ID ripper_id_regexp_beg;
 static ID ripper_id_regexp_end;
@@ -59,7 +61,7 @@ static ID ripper_id_CHAR;
 #include "eventids2table.c"
 
 static void
-ripper_init_eventids2(VALUE self)
+ripper_init_eventids2(void)
 {
     ripper_id_backref = rb_intern_const("on_backref");
     ripper_id_backtick = rb_intern_const("on_backtick");
@@ -91,6 +93,8 @@ ripper_init_eventids2(VALUE self)
     ripper_id_tstring_end = rb_intern_const("on_tstring_end");
     ripper_id_words_beg = rb_intern_const("on_words_beg");
     ripper_id_qwords_beg = rb_intern_const("on_qwords_beg");
+    ripper_id_qsymbols_beg = rb_intern_const("on_qsymbols_beg");
+    ripper_id_symbols_beg = rb_intern_const("on_symbols_beg");
     ripper_id_words_sep = rb_intern_const("on_words_sep");
     ripper_id_regexp_beg = rb_intern_const("on_regexp_beg");
     ripper_id_regexp_end = rb_intern_const("on_regexp_end");
@@ -108,8 +112,6 @@ ripper_init_eventids2(VALUE self)
     ripper_id_heredoc_end = rb_intern_const("on_heredoc_end");
     ripper_id___end__ = rb_intern_const("on___end__");
     ripper_id_CHAR = rb_intern_const("on_CHAR");
-
-    ripper_init_eventids2_table(self);
 }
 
 static const struct token_assoc {
@@ -230,14 +232,18 @@ static const struct token_assoc {
     {tOROP,		&ripper_id_op},
     {tPOW,		&ripper_id_op},
     {tQWORDS_BEG,	&ripper_id_qwords_beg},
+    {tQSYMBOLS_BEG,	&ripper_id_qsymbols_beg},
+    {tSYMBOLS_BEG,	&ripper_id_symbols_beg},
     {tREGEXP_BEG,	&ripper_id_regexp_beg},
     {tREGEXP_END,	&ripper_id_regexp_end},
     {tRPAREN,		&ripper_id_rparen},
     {tRSHFT,		&ripper_id_op},
     {tSTAR,		&ripper_id_op},
+    {tDSTAR,		&ripper_id_op},
     {tSTRING_BEG,	&ripper_id_tstring_beg},
     {tSTRING_CONTENT,	&ripper_id_tstring_content},
     {tSTRING_DBEG,	&ripper_id_embexpr_beg},
+    {tSTRING_DEND,	&ripper_id_embexpr_end},
     {tSTRING_DVAR,	&ripper_id_embvar},
     {tSTRING_END,	&ripper_id_tstring_end},
     {tSYMBEG,		&ripper_id_symbeg},
@@ -276,4 +282,6 @@ ripper_token2eventid(int tok)
         return ripper_id_CHAR;
     }
     rb_raise(rb_eRuntimeError, "[Ripper FATAL] unknown token %d", tok);
+
+    UNREACHABLE;
 }

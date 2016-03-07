@@ -64,21 +64,6 @@ class TestModule < Test::Unit::TestCase
 
   # Support stuff
 
-  def remove_pp_mixins(list)
-    list.reject {|c| c == PP::ObjectMixin }
-  end
-
-  def remove_json_mixins(list)
-    list.reject {|c| c.to_s.start_with?("JSON") }
-  end
-
-  def remove_rake_mixins(list)
-    list.reject {|c|
-      name = c.name
-      name.start_with?("Rake") or name.start_with?("FileUtils")
-    }
-  end
-
   module Mixin
     MIXIN = 1
     def mixin
@@ -216,10 +201,11 @@ class TestModule < Test::Unit::TestCase
     assert_equal([User, Mixin],      User.ancestors)
     assert_equal([Mixin],            Mixin.ancestors)
 
-    assert_equal([Object, Kernel, BasicObject],
-                 remove_rake_mixins(remove_json_mixins(remove_pp_mixins(Object.ancestors))))
-    assert_equal([String, Comparable, Object, Kernel, BasicObject],
-                 remove_rake_mixins(remove_json_mixins(remove_pp_mixins(String.ancestors))))
+    ancestors = Object.ancestors
+    mixins = ancestors - [Object, Kernel, BasicObject]
+    mixins << JSON::Ext::Generator::GeneratorMethods::String if defined?(JSON::Ext::Generator::GeneratorMethods::String)
+    assert_equal([Object, Kernel, BasicObject], ancestors - mixins)
+    assert_equal([String, Comparable, Object, Kernel, BasicObject], String.ancestors - mixins)
   end
 
   CLASS_EVAL = 2
@@ -273,13 +259,39 @@ class TestModule < Test::Unit::TestCase
     assert_equal([:MIXIN, :USER], User.constants.sort)
   end
 
+  def test_dup
+    bug6454 = '[ruby-core:45132]'
+
+    a = Module.new
+    Other.const_set :BUG6454, a
+
+    original = Other::BUG6454.inspect
+
+    b = a.dup
+    Other.const_set :BUG6454_dup, b
+
+    assert_equal "TestModule::Other::BUG6454_dup", b.inspect, bug6454
+  end
+
+  def test_dup_anonymous
+    bug6454 = '[ruby-core:45132]'
+
+    a = Module.new
+    original = a.inspect
+
+    b = a.dup
+
+    refute_equal original, b.inspect, bug6454
+  end
+
   def test_included_modules
     assert_equal([], Mixin.included_modules)
     assert_equal([Mixin], User.included_modules)
-    assert_equal([Kernel],
-                 remove_rake_mixins(remove_json_mixins(remove_pp_mixins(Object.included_modules))))
-    assert_equal([Comparable, Kernel],
-                 remove_rake_mixins(remove_json_mixins(remove_pp_mixins(String.included_modules))))
+
+    mixins = Object.included_modules - [Kernel]
+    mixins << JSON::Ext::Generator::GeneratorMethods::String if defined?(JSON::Ext::Generator::GeneratorMethods::String)
+    assert_equal([Kernel], Object.included_modules - mixins)
+    assert_equal([Comparable, Kernel], String.included_modules - mixins)
   end
 
   def test_instance_methods
@@ -457,7 +469,7 @@ class TestModule < Test::Unit::TestCase
     assert_equal(false, o.respond_to?(:bar=))
   end
 
-  def test_const_get2
+  def test_const_get_evaled
     c1 = Class.new
     c2 = Class.new(c1)
 
@@ -472,6 +484,9 @@ class TestModule < Test::Unit::TestCase
     assert_raise(NameError) { c2::Bar }
     assert_raise(NameError) { c2.const_get(:Bar) }
     assert_raise(NameError) { c2.const_get(:Bar, false) }
+    assert_raise(NameError) { c2.const_get("Bar", false) }
+    assert_raise(NameError) { c2.const_get("BaR11", false) }
+    assert_raise(NameError) { Object.const_get("BaR11", false) }
 
     c1.instance_eval do
       def const_missing(x)
@@ -483,18 +498,80 @@ class TestModule < Test::Unit::TestCase
     assert_equal(:Bar, c2::Bar)
     assert_equal(:Bar, c2.const_get(:Bar))
     assert_equal(:Bar, c2.const_get(:Bar, false))
+    assert_equal(:Bar, c2.const_get("Bar"))
+    assert_equal(:Bar, c2.const_get("Bar", false))
+
+    v = c2.const_get("Bar11", false)
+    assert_equal("Bar11".to_sym, v)
 
     assert_raise(NameError) { c1.const_get(:foo) }
   end
 
-  def test_const_set2
+  def test_const_set_invalid_name
     c1 = Class.new
     assert_raise(NameError) { c1.const_set(:foo, :foo) }
   end
 
-  def test_const_get3
+  def test_const_get_invalid_name
     c1 = Class.new
     assert_raise(NameError) { c1.const_defined?(:foo) }
+    bug5084 = '[ruby-dev:44200]'
+    assert_raise(TypeError, bug5084) { c1.const_defined?(1) }
+  end
+
+  def test_const_get_no_inherited
+    bug3422 = '[ruby-core:30719]'
+    assert_in_out_err([], <<-INPUT, %w[1 NameError A], [], bug3422)
+    BasicObject::A = 1
+    puts [true, false].map {|inh|
+      begin
+        Object.const_get(:A, inh)
+      rescue NameError => e
+        [e.class, e.name]
+      end
+    }
+    INPUT
+  end
+
+  def test_const_get_inherited
+    bug3423 = '[ruby-core:30720]'
+    assert_in_out_err([], <<-INPUT, %w[NameError A NameError A], [], bug3423)
+    module Foo; A = 1; end
+    class Object; include Foo; end
+    class Bar; include Foo; end
+
+    puts [Object, Bar].map {|klass|
+      begin
+        klass.const_get(:A, false)
+      rescue NameError => e
+        [e.class, e.name]
+      end
+    }
+    INPUT
+  end
+
+  def test_const_in_module
+    bug3423 = '[ruby-core:37698]'
+    assert_in_out_err([], <<-INPUT, %w[ok], [], bug3423)
+    module LangModuleSpecInObject
+      module LangModuleTop
+      end
+    end
+    include LangModuleSpecInObject
+    module LangModuleTop
+    end
+    puts "ok" if LangModuleSpecInObject::LangModuleTop == LangModuleTop
+    INPUT
+
+    bug5264 = '[ruby-core:39227]'
+    assert_in_out_err([], <<-'INPUT', [], [], bug5264)
+    class A
+      class X; end
+    end
+    class B < A
+      module X; end
+    end
+    INPUT
   end
 
   def test_class_variable_get
@@ -835,6 +912,64 @@ class TestModule < Test::Unit::TestCase
     assert_equal mod.instance_method(:a=), memo.shift
   end
 
+  def test_method_undefined
+    added = []
+    undefed = []
+    removed = []
+    mod = Module.new do
+      mod = self
+      def f
+      end
+      (class << self ; self ; end).class_eval do
+        define_method :method_added do |sym|
+          added << sym
+        end
+        define_method :method_undefined do |sym|
+          undefed << sym
+        end
+        define_method :method_removed do |sym|
+          removed << sym
+        end
+      end
+    end
+    assert_method_defined?(mod, :f)
+    mod.module_eval do
+      undef :f
+    end
+    assert_equal [], added
+    assert_equal [:f], undefed
+    assert_equal [], removed
+  end
+
+  def test_method_removed
+    added = []
+    undefed = []
+    removed = []
+    mod = Module.new do
+      mod = self
+      def f
+      end
+      (class << self ; self ; end).class_eval do
+        define_method :method_added do |sym|
+          added << sym
+        end
+        define_method :method_undefined do |sym|
+          undefed << sym
+        end
+        define_method :method_removed do |sym|
+          removed << sym
+        end
+      end
+    end
+    assert_method_defined?(mod, :f)
+    mod.module_eval do
+      remove_method :f
+    end
+    assert_equal [], added
+    assert_equal [], undefed
+    assert_equal [:f], removed
+  end
+
   def test_method_redefinition
     feature2155 = '[ruby-dev:39400]'
 
@@ -880,7 +1015,7 @@ class TestModule < Test::Unit::TestCase
       Module.new do
         define_method(:foo) do end
         alias bar foo
-        alias barf oo
+        alias bar foo
       end
     end
     assert_equal("", stderr)
@@ -960,6 +1095,19 @@ class TestModule < Test::Unit::TestCase
     assert_raise(NameError) { c::FOO }
   end
 
+  def test_private_constant2
+    c = Class.new
+    c.const_set(:FOO, "foo")
+    c.const_set(:BAR, "bar")
+    assert_equal("foo", c::FOO)
+    assert_equal("bar", c::BAR)
+    c.private_constant(:FOO, :BAR)
+    assert_raise(NameError) { c::FOO }
+    assert_raise(NameError) { c::BAR }
+    assert_equal("foo", c.class_eval("FOO"))
+    assert_equal("bar", c.class_eval("BAR"))
+  end
+
   class PrivateClass
   end
   private_constant :PrivateClass
@@ -1005,6 +1153,27 @@ class TestModule < Test::Unit::TestCase
       end
     INPUT
     assert_in_out_err([], src, %w(Object :ok), [])
+  end
+
+  def test_private_constants_clear_inlinecache
+    bug5702 = '[ruby-dev:44929]'
+    src = <<-INPUT
+    class A
+      C = :Const
+      def self.get_C
+        A::C
+      end
+      # fill cache
+      A.get_C
+      private_constant :C, :D rescue nil
+      begin
+        A.get_C
+      rescue NameError
+        puts "A.get_C"
+      end
+    end
+    INPUT
+    assert_in_out_err([], src, %w(A.get_C), [], bug5702)
   end
 
   def test_constant_lookup_in_method_defined_by_class_eval
@@ -1070,62 +1239,133 @@ class TestModule < Test::Unit::TestCase
     assert_in_out_err([], src, ["NameError"], [])
   end
 
-  def test_mix_method
-    american = Module.new do
-      attr_accessor :address
-    end
-    japanese = Module.new do
-      attr_accessor :address
-    end
-
-    japanese_american = Class.new
-    assert_nothing_raised(ArgumentError) {
-      japanese_american.class_eval {mix american}
-    }
-    assert_raise(ArgumentError) {
-      japanese_american.class_eval {mix japanese}
-    }
-
-    japanese_american = Class.new
-    assert_nothing_raised(ArgumentError) {
-      japanese_american.class_eval {
-        mix american, :address => :us_address, :address= => :us_address=
-      }
-    }
-    assert_nothing_raised(ArgumentError) {
-      japanese_american.class_eval {
-        mix japanese, :address => :jp_address, :address= => :jp_address=
-      }
-    }
-
-    japanese_american = Class.new
-    assert_nothing_raised(ArgumentError) {
-      japanese_american.class_eval {
-        mix japanese, :address => nil, :address= => nil
-      }
-    }
-    assert_raise(NoMethodError) {
-      japanese_american.new.address
-    }
-    assert_nothing_raised(ArgumentError) {
-      japanese_american.class_eval {
-        mix american
-      }
-    }
+  module M0
+    def m1; [:M0] end
+  end
+  module M1
+    def m1; [:M1, *super] end
+  end
+  module M2
+    def m1; [:M2, *super] end
+  end
+  M3 = Module.new do
+    def m1; [:M3, *super] end
+  end
+  module M4
+    def m1; [:M4, *super] end
+  end
+  class C
+    def m1; end
+  end
+  class C0 < C
+    include M0
+    prepend M1
+    def m1; [:C0, *super] end
+  end
+  class C1 < C0
+    prepend M2, M3
+    include M4
+    def m1; [:C1, *super] end
   end
 
-  def test_mix_const
-    foo = Module.new do
-      const_set(:D, 55)
+  def test_prepend
+    obj = C0.new
+    expected = [:M1,:C0,:M0]
+    assert_equal(expected, obj.m1)
+    obj = C1.new
+    expected = [:M2,:M3,:C1,:M4,:M1,:C0,:M0]
+    assert_equal(expected, obj.m1)
+  end
+
+  def test_prepend_inheritance
+    bug6654 = '[ruby-core:45914]'
+    a = labeled_module("a")
+    b = labeled_module("b") {include a}
+    c = labeled_class("c") {prepend b}
+    assert_operator(c, :<, b, bug6654)
+    assert_operator(c, :<, a, bug6654)
+  end
+
+  def test_prepend_instance_methods
+    bug6655 = '[ruby-core:45915]'
+    assert_equal(Object.instance_methods, Class.new {prepend Module.new}.instance_methods, bug6655)
+  end
+
+  def test_prepend_singleton_methods
+    o = Object.new
+    o.singleton_class.class_eval {prepend Module.new}
+    assert_equal([], o.singleton_methods)
+  end
+
+  def test_prepend_remove_method
+    assert_raise(NameError) do
+      Class.new do
+        prepend Module.new {def foo; end}
+        remove_method(:foo)
+      end
     end
-    bar = Class.new do
-      const_set(:D, 42)
+  end
+
+  def test_prepend_class_ancestors
+    bug6658 = '[ruby-core:45919]'
+    m = labeled_module("m")
+    c = labeled_class("c") {prepend m}
+    assert_equal([m, c], c.ancestors[0, 2], bug6658)
+
+    bug6662 = '[ruby-dev:45868]'
+    c2 = labeled_class("c2", c)
+    anc = c2.ancestors
+    assert_equal([c2, m, c, Object], anc[0..anc.index(Object)], bug6662)
+  end
+
+  def test_prepend_module_ancestors
+    bug6659 = '[ruby-dev:45861]'
+    m0 = labeled_module("m0") {def x; [:m0, *super] end}
+    m1 = labeled_module("m1") {def x; [:m1, *super] end; prepend m0}
+    m2 = labeled_module("m2") {def x; [:m2, *super] end; prepend m1}
+    c0 = labeled_class("c0") {def x; [:c0] end}
+    c1 = labeled_class("c1") {def x; [:c1] end; prepend m2}
+    c2 = labeled_class("c2", c0) {def x; [:c2, *super] end; include m2}
+
+    assert_equal([m0, m1], m1.ancestors, bug6659)
+
+    bug6662 = '[ruby-dev:45868]'
+    assert_equal([m0, m1, m2], m2.ancestors, bug6662)
+    assert_equal([m0, m1, m2, c1], c1.ancestors[0, 4], bug6662)
+    assert_equal([:m0, :m1, :m2, :c1], c1.new.x)
+    assert_equal([c2, m0, m1, m2, c0], c2.ancestors[0, 5], bug6662)
+    assert_equal([:c2, :m0, :m1, :m2, :c0], c2.new.x)
+  end
+
+  def labeled_module(name, &block)
+    Module.new do
+      singleton_class.class_eval {define_method(:to_s) {name}}
+      class_eval(&block) if block
     end
-    assert_nothing_raised(ArgumentError) {
-      bar.class_eval {
-        mix foo
-      }
-    }
-    assert_equal(42, bar::D)
+  end
+
+  def labeled_class(name, superclass = Object, &block)
+    Class.new(superclass) do
+      singleton_class.class_eval {define_method(:to_s) {name}}
+      class_eval(&block) if block
+    end
+  end
+
+  def test_prepend_instance_methods_false
+    bug6660 = '[ruby-dev:45863]'
+    assert_equal([:m1], Class.new{ prepend Module.new; def m1; end }.instance_methods(false), bug6660)
+    assert_equal([:m1], Class.new(Class.new{def m2;end}){ prepend Module.new; def m1; end }.instance_methods(false), bug6660)
+  end
+
+  def test_class_variables
+    m = Module.new
+    m.class_variable_set(:@@foo, 1)
+    m2 = Module.new
+    m2.send(:include, m)
+    m2.class_variable_set(:@@bar, 2)
+    assert_equal([:@@foo], m.class_variables)
+    assert_equal([:@@bar, :@@foo], m2.class_variables)
+    assert_equal([:@@bar, :@@foo], m2.class_variables(true))
+    assert_equal([:@@bar], m2.class_variables(false))
   end
 end

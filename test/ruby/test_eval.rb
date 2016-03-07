@@ -127,72 +127,68 @@ class TestEval < Test::Unit::TestCase
     }
   end
 
-  def forall_TYPE(mid)
+  def forall_TYPE
     objects = [Object.new, [], nil, true, false, 77, :sym] # TODO: check
     objects.each do |obj|
       obj.instance_variable_set :@ivar, 12
-      send mid, obj
+      yield obj
     end
   end
 
   def test_instance_eval_string_basic
-    forall_TYPE :instance_eval_string_basic_i
-  end
+    forall_TYPE do |o|
+      assert_equal nil,   o.instance_eval("nil")
+      assert_equal true,  o.instance_eval("true")
+      assert_equal false, o.instance_eval("false")
+      assert_equal o,     o.instance_eval("self")
+      assert_equal 1,     o.instance_eval("1")
+      assert_equal :sym,  o.instance_eval(":sym")
 
-  def instance_eval_string_basic_i(o)
-    assert_equal nil,   o.instance_eval("nil")
-    assert_equal true,  o.instance_eval("true")
-    assert_equal false, o.instance_eval("false")
-    assert_equal o,     o.instance_eval("self")
-    assert_equal 1,     o.instance_eval("1")
-    assert_equal :sym,  o.instance_eval(":sym")
+      assert_equal 11,    o.instance_eval("11")
+      assert_equal 12,    o.instance_eval("@ivar")
+      assert_equal 13,    o.instance_eval("@@cvar")
+      assert_equal 14,    o.instance_eval("$gvar__eval")
+      assert_equal 15,    o.instance_eval("Const")
+      assert_equal 16,    o.instance_eval("7 + 9")
+      assert_equal 17,    o.instance_eval("17.to_i")
+      assert_equal "18",  o.instance_eval(%q("18"))
+      assert_equal "19",  o.instance_eval(%q("1#{9}"))
 
-    assert_equal 11,    o.instance_eval("11")
-    assert_equal 12,    o.instance_eval("@ivar")
-    assert_equal 13,    o.instance_eval("@@cvar")
-    assert_equal 14,    o.instance_eval("$gvar__eval")
-    assert_equal 15,    o.instance_eval("Const")
-    assert_equal 16,    o.instance_eval("7 + 9")
-    assert_equal 17,    o.instance_eval("17.to_i")
-    assert_equal "18",  o.instance_eval(%q("18"))
-    assert_equal "19",  o.instance_eval(%q("1#{9}"))
-
-    1.times {
-      assert_equal 12,  o.instance_eval("@ivar")
-      assert_equal 13,  o.instance_eval("@@cvar")
-      assert_equal 14,  o.instance_eval("$gvar__eval")
-      assert_equal 15,  o.instance_eval("Const")
-    }
+      1.times {
+        assert_equal 12,  o.instance_eval("@ivar")
+        assert_equal 13,  o.instance_eval("@@cvar")
+        assert_equal 14,  o.instance_eval("$gvar__eval")
+        assert_equal 15,  o.instance_eval("Const")
+      }
+    end
   end
 
   def test_instance_eval_block_basic
-    forall_TYPE :instance_eval_block_basic_i
-  end
+    forall_TYPE do |o|
+      assert_equal nil,   o.instance_eval { nil }
+      assert_equal true,  o.instance_eval { true }
+      assert_equal false, o.instance_eval { false }
+      assert_equal o,     o.instance_eval { self }
+      assert_equal 1,     o.instance_eval { 1 }
+      assert_equal :sym,  o.instance_eval { :sym }
 
-  def instance_eval_block_basic_i(o)
-    assert_equal nil,   o.instance_eval { nil }
-    assert_equal true,  o.instance_eval { true }
-    assert_equal false, o.instance_eval { false }
-    assert_equal o,     o.instance_eval { self }
-    assert_equal 1,     o.instance_eval { 1 }
-    assert_equal :sym,  o.instance_eval { :sym }
+      assert_equal 11,    o.instance_eval { 11 }
+      assert_equal 12,    o.instance_eval { @ivar }
+      assert_equal 13,    o.instance_eval { @@cvar }
+      assert_equal 14,    o.instance_eval { $gvar__eval }
+      assert_equal 15,    o.instance_eval { Const }
+      assert_equal 16,    o.instance_eval { 7 + 9 }
+      assert_equal 17,    o.instance_eval { 17.to_i }
+      assert_equal "18",  o.instance_eval { "18" }
+      assert_equal "19",  o.instance_eval { "1#{9}" }
 
-    assert_equal 11,    o.instance_eval { 11 }
-    assert_equal 12,    o.instance_eval { @ivar }
-    assert_equal 13,    o.instance_eval { @@cvar }
-    assert_equal 14,    o.instance_eval { $gvar__eval }
-    assert_equal 15,    o.instance_eval { Const }
-    assert_equal 16,    o.instance_eval { 7 + 9 }
-    assert_equal 17,    o.instance_eval { 17.to_i }
-    assert_equal "18",  o.instance_eval { "18" }
-    assert_equal "19",  o.instance_eval { "1#{9}" }
-
-    1.times {
-      assert_equal 12,  o.instance_eval { @ivar }
-      assert_equal 13,  o.instance_eval { @@cvar }
-      assert_equal 14,  o.instance_eval { $gvar__eval }
-      assert_equal 15,  o.instance_eval { Const }
-    }
+      1.times {
+        assert_equal 12,  o.instance_eval { @ivar }
+        assert_equal 13,  o.instance_eval { @@cvar }
+        assert_equal 14,  o.instance_eval { $gvar__eval }
+        assert_equal 15,  o.instance_eval { Const }
+      }
+    end
   end
 
   def test_instance_eval_cvar

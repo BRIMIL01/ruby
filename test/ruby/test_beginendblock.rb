@@ -30,22 +30,27 @@ class TestBeginEndBlock < Test::Unit::TestCase
     assert_equal(%w(:begin :end), result.split)
     result = IO.popen([ruby, "-p", "-eBEGIN{p :begin}", "-eEND{p :end}", inputpath]){|io|io.read}
     assert_equal(%w(:begin foo bar :end), result.split)
+  ensure
+    input.unlink
   end
 
   def test_begininmethod
-    assert_raise(SyntaxError) do
+    e = assert_raise(SyntaxError) do
       eval("def foo; BEGIN {}; end")
     end
+    assert_match(/BEGIN is permitted only at toplevel/, e.message)
 
-    assert_raise(SyntaxError) do
+    e = assert_raise(SyntaxError) do
       eval('eval("def foo; BEGIN {}; end")')
     end
+    assert_match(/BEGIN is permitted only at toplevel/, e.message)
   end
 
   def test_begininclass
-    assert_raise(SyntaxError) do
+    e = assert_raise(SyntaxError) do
       eval("class TestBeginEndBlock; BEGIN {}; end")
     end
+    assert_match(/BEGIN is permitted only at toplevel/, e.message)
   end
 
   def test_endblockwarn
@@ -73,6 +78,9 @@ endblockwarn_rb:2: warning: END in method; use at_exit
 EOW
     assert_equal(expected, File.read(erroutpath))
     # expecting Tempfile to unlink launcher and errout file.
+  ensure
+    launcher.unlink
+    errout.unlink
   end
 
   def test_raise_in_at_exit
@@ -143,6 +151,20 @@ EOW
                  "outer0" ]
 
     assert_in_out_err(t.path, "", expected, [], "[ruby-core:35237]")
-    t.close
+  ensure
+    t.close(true)
+  end
+
+  def test_rescue_at_exit
+    bug5218 = '[ruby-core:43173][Bug #5218]'
+    cmd = [
+      "raise 'X' rescue nil",
+      "nil",
+      "exit(42)",
+    ]
+    %w[at_exit END].each do |ex|
+      out, err, status = EnvUtil.invoke_ruby(cmd.map {|s|["-e", "#{ex} {#{s}}"]}.flatten, "", true, true)
+      assert_equal(["", "", 42], [out, err, status.exitstatus], "#{bug5218}: #{ex}")
+    end
   end
 end

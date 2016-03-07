@@ -36,7 +36,7 @@ class TestMethod < Test::Unit::TestCase
   module M
     def func; end
     module_function :func
-    def meth; end
+    def meth; :meth end
   end
 
   def mv1() end
@@ -90,6 +90,20 @@ class TestMethod < Test::Unit::TestCase
     assert_equal(:m, Class.new {define_method(:m) {__method__}}.new.m)
     assert_equal(:m, Class.new {define_method(:m) {tap{return __method__}}}.new.m)
     assert_nil(eval("class TestCallee; __method__; end"))
+
+    assert_equal(:test_callee, __callee__)
+    [
+      ["method",              Class.new {def m; __callee__; end},],
+      ["block",               Class.new {def m; tap{return __callee__}; end},],
+      ["define_method",       Class.new {define_method(:m) {__callee__}}],
+      ["define_method block", Class.new {define_method(:m) {tap{return __callee__}}}],
+    ].each do |mesg, c|
+      c.class_eval {alias m2 m}
+      o = c.new
+      assert_equal(:m, o.m, mesg)
+      assert_equal(:m2, o.m2, mesg)
+    end
+    assert_nil(eval("class TestCallee; __callee__; end"))
   end
 
   def test_method_in_define_method_block
@@ -123,6 +137,7 @@ class TestMethod < Test::Unit::TestCase
     def o.foo; end
     assert_nothing_raised { RubyVM::InstructionSequence.disasm(o.method(:foo)) }
     assert_nothing_raised { RubyVM::InstructionSequence.disasm("x".method(:upcase)) }
+    assert_nothing_raised { RubyVM::InstructionSequence.disasm(method(:to_s).to_proc) }
   end
 
   def test_new
@@ -157,6 +172,7 @@ class TestMethod < Test::Unit::TestCase
     o = Object.new
     def o.foo; end
     assert_kind_of(Integer, o.method(:foo).hash)
+    assert_equal(Array.instance_method(:map).hash, Array.instance_method(:collect).hash)
   end
 
   def test_receiver_name_owner
@@ -228,9 +244,25 @@ class TestMethod < Test::Unit::TestCase
       Module.new.module_eval {define_method(:foo, Base.instance_method(:foo))}
     end
 
-    assert_raise(TypeError) do
-      Class.new.class_eval {define_method(:meth, M.instance_method(:meth))}
-    end
+    feature4254 = '[ruby-core:34267]'
+    m = Module.new {define_method(:meth, M.instance_method(:meth))}
+    assert_equal(:meth, Object.new.extend(m).meth, feature4254)
+    c = Class.new {define_method(:meth, M.instance_method(:meth))}
+    assert_equal(:meth, c.new.meth, feature4254)
+  end
+
+  def test_super_in_proc_from_define_method
+    c1 = Class.new {
+      def m
+        :m1
+      end
+    }
+    c2 = Class.new(c1) { define_method(:m) { Proc.new { super() } } }
+    # c2.new.m.call should return :m1, but currently it raise NoMethodError.
+    # see [Bug #4881] and [Bug #3136]
+    assert_raise(NoMethodError) {
+      c2.new.m.call
+    }
   end
 
   def test_clone
@@ -405,7 +437,7 @@ class TestMethod < Test::Unit::TestCase
 
     assert_equal(true,  respond_to?(:mv1))
     assert_equal(false, respond_to?(:mv2))
-    assert_equal(true, respond_to?(:mv3))
+    assert_equal(false, respond_to?(:mv3))
 
     assert_equal(true,  respond_to?(:mv1, true))
     assert_equal(true,  respond_to?(:mv2, true))
@@ -427,7 +459,7 @@ class TestMethod < Test::Unit::TestCase
 
     assert_equal(true,  v.respond_to?(:mv1))
     assert_equal(false, v.respond_to?(:mv2))
-    assert_equal(true, v.respond_to?(:mv3))
+    assert_equal(false, v.respond_to?(:mv3))
 
     assert_equal(true,  v.respond_to?(:mv1, true))
     assert_equal(true,  v.respond_to?(:mv2, true))
@@ -444,5 +476,17 @@ class TestMethod < Test::Unit::TestCase
     assert_nothing_raised { v.instance_eval { mv1 } }
     assert_nothing_raised { v.instance_eval { mv2 } }
     assert_nothing_raised { v.instance_eval { mv3 } }
+  end
+
+  def test_bound_method_entry
+    bug6171 = '[ruby-core:43383]'
+    assert_ruby_status([], <<-EOC, bug6171)
+      class Bug6171
+        def initialize(target)
+          define_singleton_method(:reverse, target.method(:reverse).to_proc)
+        end
+      end
+      1000.times {p = Bug6171.new('test'); 10000.times {p.reverse}}
+      EOC
   end
 end

@@ -30,6 +30,7 @@ extern "C" {
 #endif
 #include <ruby.h>
 #include <ruby/io.h>
+#include <ruby/thread.h>
 
 /*
  * Check the OpenSSL version
@@ -45,7 +46,11 @@ extern "C" {
 #endif
 
 #if defined(_WIN32)
+#  include <openssl/e_os2.h>
 #  define OSSL_NO_CONF_API 1
+#  if !defined(OPENSSL_SYS_WIN32)
+#    define OPENSSL_SYS_WIN32 1
+#  endif
 #  include <winsock2.h>
 #endif
 #include <errno.h>
@@ -69,6 +74,11 @@ extern "C" {
 #  define OSSL_OCSP_ENABLED
 #  include <openssl/ocsp.h>
 #endif
+
+/* OpenSSL requires passwords for PEM-encoded files to be at least four
+ * characters long
+ */
+#define OSSL_MIN_PWD_LEN 4
 
 /*
  * Common Module
@@ -123,6 +133,7 @@ STACK_OF(X509) *ossl_x509_ary2sk(VALUE);
 STACK_OF(X509) *ossl_protect_x509_ary2sk(VALUE,int*);
 VALUE ossl_x509_sk2ary(STACK_OF(X509) *certs);
 VALUE ossl_x509crl_sk2ary(STACK_OF(X509_CRL) *crl);
+VALUE ossl_x509name_sk2ary(STACK_OF(X509_NAME) *names);
 VALUE ossl_buf2str(char *buf, int len);
 #define ossl_str_adjust(str, p) \
 do{\

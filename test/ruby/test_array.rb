@@ -12,6 +12,17 @@ class TestArray < Test::Unit::TestCase
     $VERBOSE = @verbose
   end
 
+  def test_percent_i
+    assert_equal([:foo, :bar], %i[foo bar])
+    assert_equal([:"\"foo"], %i["foo])
+  end
+
+  def test_percent_I
+    x = 10
+    assert_equal([:foo, :b10], %I[foo b#{x}])
+    assert_equal([:"\"foo10"], %I["foo#{x}])
+  end
+
   def test_0_literal
     assert_equal([1, 2, 3, 4], [1, 2] + [3, 4])
     assert_equal([1, 2, 1, 2], [1, 2] * 2)
@@ -270,17 +281,17 @@ class TestArray < Test::Unit::TestCase
   end
 
   def test_EQUAL # '=='
-    assert(@cls[] == @cls[])
-    assert(@cls[1] == @cls[1])
-    assert(@cls[1, 1, 2, 2] == @cls[1, 1, 2, 2])
-    assert(@cls[1.0, 1.0, 2.0, 2.0] == @cls[1, 1, 2, 2])
+    assert_operator(@cls[], :==, @cls[])
+    assert_operator(@cls[1], :==, @cls[1])
+    assert_operator(@cls[1, 1, 2, 2], :==, @cls[1, 1, 2, 2])
+    assert_operator(@cls[1.0, 1.0, 2.0, 2.0], :==, @cls[1, 1, 2, 2])
   end
 
   def test_VERY_EQUAL # '==='
-    assert(@cls[] === @cls[])
-    assert(@cls[1] === @cls[1])
-    assert(@cls[1, 1, 2, 2] === @cls[1, 1, 2, 2])
-    assert(@cls[1.0, 1.0, 2.0, 2.0] === @cls[1, 1, 2, 2])
+    assert_operator(@cls[], :===, @cls[])
+    assert_operator(@cls[1], :===, @cls[1])
+    assert_operator(@cls[1, 1, 2, 2], :===, @cls[1, 1, 2, 2])
+    assert_operator(@cls[1.0, 1.0, 2.0, 2.0], :===, @cls[1, 1, 2, 2])
   end
 
   def test_AREF # '[]'
@@ -461,7 +472,7 @@ class TestArray < Test::Unit::TestCase
           b = a.clone
 
           assert_equal(a, b)
-          assert(a.__id__ != b.__id__)
+          assert_not_equal(a.__id__, b.__id__)
           assert_equal(a.frozen?, b.frozen?)
           assert_equal(a.untrusted?, b.untrusted?)
           assert_equal(a.tainted?, b.tainted?)
@@ -607,6 +618,11 @@ class TestArray < Test::Unit::TestCase
     a = @cls[ 1, 2, 3, 4, 5 ]
     assert_equal(a, a.delete_if { |i| i > 3 })
     assert_equal(@cls[1, 2, 3], a)
+
+    bug2545 = '[ruby-core:27366]'
+    a = @cls[ 5, 6, 7, 8, 9, 10 ]
+    assert_equal(9, a.delete_if {|i| break i if i > 8; assert_equal(a[0], i) || true if i < 7})
+    assert_equal(@cls[7, 8, 9, 10], a, bug2545)
   end
 
   def test_dup
@@ -618,7 +634,7 @@ class TestArray < Test::Unit::TestCase
         b = a.dup
 
         assert_equal(a, b)
-        assert(a.__id__ != b.__id__)
+        assert_not_equal(a.__id__, b.__id__)
         assert_equal(false, b.frozen?)
         assert_equal(a.tainted?, b.tainted?)
       end
@@ -666,15 +682,15 @@ class TestArray < Test::Unit::TestCase
   end
 
   def test_empty?
-    assert(@cls[].empty?)
-    assert(!@cls[1].empty?)
+    assert_empty(@cls[])
+    assert_not_empty(@cls[1])
   end
 
   def test_eql?
-    assert(@cls[].eql?(@cls[]))
-    assert(@cls[1].eql?(@cls[1]))
-    assert(@cls[1, 1, 2, 2].eql?(@cls[1, 1, 2, 2]))
-    assert(!@cls[1.0, 1.0, 2.0, 2.0].eql?(@cls[1, 1, 2, 2]))
+    assert_send([@cls[], :eql?, @cls[]])
+    assert_send([@cls[1], :eql?, @cls[1]])
+    assert_send([@cls[1, 1, 2, 2], :eql?, @cls[1, 1, 2, 2]])
+    assert_not_send([@cls[1.0, 1.0, 2.0, 2.0], :eql?, @cls[1, 1, 2, 2]])
   end
 
   def test_fill
@@ -853,18 +869,18 @@ class TestArray < Test::Unit::TestCase
     a1 = @cls[ 'cat', 'dog' ]
     a2 = @cls[ 'cat', 'dog' ]
     a3 = @cls[ 'dog', 'cat' ]
-    assert(a1.hash == a2.hash)
-    assert(a1.hash != a3.hash)
+    assert_equal(a1.hash, a2.hash)
+    assert_not_equal(a1.hash, a3.hash)
   end
 
   def test_include?
     a = @cls[ 'cat', 99, /a/, @cls[ 1, 2, 3] ]
-    assert(a.include?('cat'))
-    assert(a.include?(99))
-    assert(a.include?(/a/))
-    assert(a.include?([1,2,3]))
-    assert(!a.include?('ca'))
-    assert(!a.include?([1,2]))
+    assert_include(a, 'cat')
+    assert_include(a, 99)
+    assert_include(a, /a/)
+    assert_include(a, [1,2,3])
+    assert_not_include(a, 'ca')
+    assert_not_include(a, [1,2])
   end
 
   def test_index
@@ -915,12 +931,28 @@ class TestArray < Test::Unit::TestCase
     assert_equal(true, s.tainted?)
     assert_equal(true, s.untrusted?)
 
+    bug5902 = '[ruby-core:42161]'
+    sep = ":".taint.untrust
+
+    s = @cls[].join(sep)
+    assert_equal(false, s.tainted?, bug5902)
+    assert_equal(false, s.untrusted?, bug5902)
+    s = @cls[1].join(sep)
+    assert_equal(false, s.tainted?, bug5902)
+    assert_equal(false, s.untrusted?, bug5902)
+    s = @cls[1, 2].join(sep)
+    assert_equal(true, s.tainted?, bug5902)
+    assert_equal(true, s.untrusted?, bug5902)
+
     e = ''.force_encoding('EUC-JP')
     u = ''.force_encoding('UTF-8')
     assert_equal(Encoding::US_ASCII, [[]].join.encoding)
     assert_equal(Encoding::US_ASCII, [1, [u]].join.encoding)
     assert_equal(Encoding::UTF_8, [u, [e]].join.encoding)
     assert_equal(Encoding::UTF_8, [u, [1]].join.encoding)
+    bug5379 = '[ruby-core:39776]'
+    assert_equal(Encoding::US_ASCII, [[], u, nil].join.encoding, bug5379)
+    assert_equal(Encoding::UTF_8, [[], "\u3042", nil].join.encoding, bug5379)
   ensure
     $, = nil
   end
@@ -1087,6 +1119,11 @@ class TestArray < Test::Unit::TestCase
     a = @cls[ 1, 2, 3, 4, 5 ]
     assert_equal(a, a.reject! { |i| i > 3 })
     assert_equal(@cls[1, 2, 3], a)
+
+    bug2545 = '[ruby-core:27366]'
+    a = @cls[ 5, 6, 7, 8, 9, 10 ]
+    assert_equal(9, a.reject! {|i| break i if i > 8; assert_equal(a[0], i) || true if i < 7})
+    assert_equal(@cls[7, 8, 9, 10], a, bug2545)
   end
 
   def test_replace
@@ -1805,7 +1842,9 @@ class TestArray < Test::Unit::TestCase
   def test_values_at2
     a = [0, 1, 2, 3, 4, 5]
     assert_equal([1, 2, 3], a.values_at(1..3))
-    assert_equal([], a.values_at(7..8))
+    assert_equal([nil, nil], a.values_at(7..8))
+    bug6203 = '[ruby-core:43678]'
+    assert_equal([4, 5, nil, nil], a.values_at(4..7), bug6203)
     assert_equal([nil], a.values_at(2**31-1))
   end
 
@@ -1938,10 +1977,10 @@ class TestArray < Test::Unit::TestCase
 
   def test_sample
     100.times do
-      assert([0, 1, 2].include?([2, 1, 0].sample))
+      assert_include([0, 1, 2], [2, 1, 0].sample)
       samples = [2, 1, 0].sample(2)
       samples.each{|sample|
-        assert([0, 1, 2].include?(sample))
+        assert_include([0, 1, 2], sample)
       }
     end
 
@@ -2047,9 +2086,7 @@ class TestArray < Test::Unit::TestCase
   end
 
   def test_combination2
-    assert_nothing_raised do
-      (0..100).to_a.combination(50) { break }
-    end
+    assert_equal(:called, (0..100).to_a.combination(50) { break :called }, "[ruby-core:29240] ... must be yielded even if 100C50 > signed integer")
   end
 
   def test_product2

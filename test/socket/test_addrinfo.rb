@@ -352,6 +352,24 @@ class TestSocketAddrinfo < Test::Unit::TestCase
         # not test failure
       end
     }
+
+    TCPServer.open("0.0.0.0", 0) {|serv|
+      serv_ai = Addrinfo.new(serv.getsockname, :INET, :STREAM)
+      serv_ai = tcp_unspecified_to_loopback(serv_ai)
+      port = random_port
+      begin
+        serv_ai.connect_from(Addrinfo.tcp("0.0.0.0", port)) {|s1|
+          s2 = serv.accept
+          begin
+            assert_equal(port, s2.remote_address.ip_port)
+          ensure
+            s2.close
+          end
+        }
+      rescue *errors_addrinuse
+        # not test failure
+      end
+    }
   end
 
   def test_connect_to
@@ -494,7 +512,8 @@ class TestSocketAddrinfo < Test::Unit::TestCase
         [:ipv6_v4mapped?, "::ffff:0.0.0.0", "::ffff:255.255.255.255"],
         [:ipv6_linklocal?, "fe80::", "febf::"],
         [:ipv6_sitelocal?, "fec0::", "feef::"],
-        [:ipv6_multicast?, "ff00::", "ffff::"]
+        [:ipv6_multicast?, "ff00::", "ffff::"],
+        [:ipv6_unique_local?, "fc00::", "fd00::"],
       ]
       mlist = [
         [:ipv6_mc_nodelocal?, "ff01::", "ff11::"],

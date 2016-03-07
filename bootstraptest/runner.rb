@@ -1,4 +1,4 @@
-"exec" "${RUBY-ruby}" "-x" "$0" "$@"; true # -*- mode: ruby; coding: utf-8 -*-
+"exec" "${RUBY-ruby}" "-x" "$0" "$@" || true # -*- mode: ruby; coding: utf-8 -*-
 #!./ruby
 # $Id$
 
@@ -61,6 +61,8 @@ def main
   @ruby = File.expand_path('miniruby')
   @verbose = false
   $stress = false
+  @color = nil
+  @quiet = false
   dir = nil
   quiet = false
   tests = nil
@@ -81,8 +83,13 @@ def main
       true
     when /\A(--stress|-s)/
       $stress = true
+    when /\A--color(?:=(?:always|(auto)|(never)|(.*)))?\z/
+      warn "unknown --color argument: #$3" if $3
+      @color = $1 ? nil : !$2
+      true
     when /\A(-q|--q(uiet))\z/
       quiet = true
+      @quiet = true
       true
     when /\A(-v|--v(erbose))\z/
       @verbose = true
@@ -92,12 +99,16 @@ Usage: #{File.basename($0, '.*')} --ruby=PATH [--sets=NAME,NAME,...]
         --sets=NAME,NAME,...        Name of test sets.
         --dir=DIRECTORY             Working directory.
                                     default: /tmp/bootstraptestXXXXX.tmpwd
+        --color[=WHEN]              Colorize the output.  WHEN defaults to 'always'
+                                    or can be 'never' or 'auto'.
     -s, --stress                    stress test.
     -v, --verbose                   Output test name before exec.
     -q, --quiet                     Don\'t print header message.
     -h, --help                      Print this message and quit.
 End
       exit true
+    when /\A-j/
+      true
     else
       false
     end
@@ -110,6 +121,24 @@ End
   tests = Dir.glob("#{File.dirname($0)}/test_*.rb").sort if tests.empty?
   pathes = tests.map {|path| File.expand_path(path) }
 
+  @progress = %w[- \\ | /]
+  @progress_bs = "\b" * @progress[0].size
+  @tty = $stderr.tty?
+  case @color
+  when nil
+    @color = @tty && /dumb/ !~ ENV["TERM"]
+  end
+  @tty &&= !@verbose
+  if @color
+    # dircolors-like style
+    colors = (colors = ENV['TEST_COLORS']) ? Hash[colors.scan(/(\w+)=([^:]*)/)] : {}
+    @passed = "\e[#{colors["pass"] || "32"}m"
+    @failed = "\e[#{colors["fail"] || "31"}m"
+    @reset = "\e[m"
+    @erase = "\r\e[2K\r"
+  else
+    @passed = @failed = @reset = @erase = ""
+  end
   unless quiet
     puts Time.now
     if defined?(RUBY_DESCRIPTION)
@@ -135,11 +164,22 @@ def exec_test(pathes)
   @errbuf = []
   @location = nil
   pathes.each do |path|
-    $stderr.print "\n#{File.basename(path)} "
+    @basename = File.basename(path)
+    $stderr.print @basename, " "
     $stderr.puts if @verbose
+    count = @count
+    error = @error
     load File.expand_path(path)
+    if @tty
+      if @error == error
+        $stderr.print "#{@progress_bs}#{@passed}PASS #{@count-count}#{@reset}"
+        $stderr.print @erase if @quiet
+      else
+        $stderr.print "#{@progress_bs}#{@failed}FAIL #{@error-error}/#{@count-count}#{@reset}"
+      end
+    end
+    $stderr.puts unless @quiet
   end
-  $stderr.puts
   if @error == 0
     if @count == 0
       $stderr.puts "No tests, no problem"
@@ -159,16 +199,30 @@ end
 def show_progress(message = '')
   if @verbose
     $stderr.print "\##{@count} #{@location} "
+  elsif @tty
+    $stderr.print "#{@progress_bs}#{@progress[@count % @progress.size]}"
   end
-  faildesc = yield
+  faildesc, errout = with_stderr {yield}
   if !faildesc
-    $stderr.print '.'
+    if @tty
+      $stderr.print "#{@progress_bs}#{@progress[@count % @progress.size]}"
+    else
+      $stderr.print '.'
+    end
     $stderr.puts if @verbose
   else
-    $stderr.print 'F'
+    $stderr.print "#{@failed}F#{@reset}"
     $stderr.puts if @verbose
     error faildesc, message
+    unless errout.empty?
+      $stderr.print "#{@failed}stderr output is not empty#{@reset}\n", adjust_indent(errout)
+    end
+    if @tty and !@verbose
+      $stderr.print @basename, " ", @progress[@count % @progress.size]
+    end
   end
+rescue Interrupt
+  raise Interrupt
 rescue Exception => err
   $stderr.print 'E'
   $stderr.puts if @verbose
@@ -342,11 +396,33 @@ def get_result_string(src, opt = '')
     begin
       `#{@ruby} -W0 #{opt} #{filename}`
     ensure
+      raise Interrupt if $?.signaled? && $?.termsig == Signal.list["INT"]
       raise CoreDumpError, "core dumped" if $? and $?.coredump?
     end
   else
     eval(src).to_s
   end
+end
+
+def with_stderr
+  out = err = nil
+  begin
+    r, w = IO.pipe
+    stderr = $stderr.dup
+    $stderr.reopen(w)
+    w.close
+    reader = Thread.start {r.read}
+    begin
+      out = yield
+    ensure
+      $stderr.reopen(stderr)
+      err = reader.value
+    end
+  ensure
+    w.close rescue nil
+    r.close rescue nil
+  end
+  return out, err
 end
 
 def newtest
@@ -356,7 +432,12 @@ def newtest
 end
 
 def error(msg, additional_message)
-  @errbuf.push "\##{@count} #{@location}: #{msg}  #{additional_message}"
+  msg = "#{@failed}\##{@count} #{@location}#{@reset}: #{msg}  #{additional_message}"
+  if @tty
+    $stderr.puts "#{@erase}#{msg}"
+  else
+    @errbuf.push msg
+  end
   @error += 1
 end
 

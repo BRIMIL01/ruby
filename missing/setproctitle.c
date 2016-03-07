@@ -34,6 +34,7 @@
 
 #include "ruby.h"
 #include "ruby/util.h"
+#define compat_init_setproctitle ruby_init_setproctitle
 
 #ifndef HAVE_SETPROCTITLE
 
@@ -46,6 +47,12 @@
 #include <sys/pstat.h>
 #endif
 #include <string.h>
+
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#undef environ
+#define environ (*_NSGetEnviron())
+#endif
 
 #define SPT_NONE	0	/* don't use it at all */
 #define SPT_PSTAT	1	/* use pstat(PSTAT_SETCMD, ...) */

@@ -67,8 +67,8 @@ class CGI
   # Create an HTTP header block as a string.
   #
   # :call-seq:
-  #   headers(content_type_string="text/html")
-  #   headers(headers_hash)
+  #   header(content_type_string="text/html")
+  #   header(headers_hash)
   #
   # Includes the empty line that ends the header block.
   #
@@ -367,12 +367,13 @@ class CGI
     params = {}
     query.split(/[&;]/).each do |pairs|
       key, value = pairs.split('=',2).collect{|v| CGI::unescape(v) }
-      if key && value
-        params.has_key?(key) ? params[key].push(value) : params[key] = [value]
-      elsif key
-        params[key]=[]
-      end
+
+      next unless key
+
+      params[key] ||= []
+      params[key].push(value) if value
     end
+
     params.default=[].freeze
     params
   end
@@ -452,17 +453,17 @@ class CGI
     end
 
     ##
-    # Parses multipart form elements according to 
+    # Parses multipart form elements according to
     #   http://www.w3.org/TR/html401/interact/forms.html#h-17.13.4.2
     #
-    # Returns a hash of multipart form parameters with bodies of type StringIO or 
+    # Returns a hash of multipart form parameters with bodies of type StringIO or
     # Tempfile depending on whether the multipart form element exceeds 10 KB
     #
     #   params[name => body]
     #
     def read_multipart(boundary, content_length)
       ## read first boundary
-      stdin = $stdin
+      stdin = stdinput
       first_line = "--#{boundary}#{EOL}"
       content_length -= first_line.bytesize
       status = stdin.read(first_line.bytesize)
@@ -557,7 +558,6 @@ class CGI
           @files[name]=body
         end
         ## break loop
-        break if buf.size == 0
         break if content_length == -1
       end
       raise EOFError, "bad boundary end of body part" unless boundary_end =~ /--/

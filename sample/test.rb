@@ -4,9 +4,94 @@
 $testnum=0
 $ntest=0
 $failed = 0
+class Progress
+  def initialize
+    @color = nil
+    @quiet = nil
+    ARGV.each do |arg|
+      case arg
+      when /\A--color(?:=(?:always|(auto)|(never)|(.*)))?\z/
+        warn "unknown --color argument: #$3" if $3
+        @color = $1 ? nil : !$2
+      when /\A-(q|-quiet)\z/
+        @quiet = true
+      end
+    end
+    @tty = STDERR.tty? && !STDOUT.tty? && /dumb/ !~ ENV["TERM"]
+    case @color
+    when nil
+      @color = @tty
+    end
+    if @color
+      # dircolors-like style
+      colors = (colors = ENV['TEST_COLORS']) ? Hash[colors.scan(/(\w+)=([^:]*)/)] : {}
+      @passed = "\e[#{colors["pass"] || "32"}m"
+      @failed = "\e[#{colors["fail"] || "31"}m"
+      @reset = "\e[m"
+    else
+      @passed = @failed = @reset = ""
+    end
+    extend(Rotator) if @tty
+  end
+
+  def passed_string
+    "."
+  end
+  def failed_string
+    "#{@failed}F#{@reset}"
+  end
+  def init_string
+  end
+  def finish_string
+    if @quiet
+      "\n"
+    else
+      "#{@passed}#{@ok ? 'OK' : ''} #{$testnum}#{@reset}\n"
+    end
+  end
+  def pass
+    STDERR.print passed_string
+  end
+  def fail
+    @ok = false
+    STDERR.print failed_string
+  end
+  def init
+    @ok = true
+    STDERR.print init_string
+  end
+  def finish
+    STDERR.print finish_string
+  end
+
+  module Rotator
+    ROTATOR = %w[- \\ | /]
+    BS = "\b" * ROTATOR[0].size
+    def passed_string
+      "#{BS}#{ROTATOR[(@count += 1) % ROTATOR.size]}"
+    end
+    def failed_string
+      "#{BS}#{super}#{ROTATOR[@count % ROTATOR.size]}"
+    end
+    def init_string
+      @count = 0
+      " "
+    end
+    def finish_string
+      s = "#{BS}#{' ' * BS.size}#{BS}#{super}"
+      s.gsub!(/\n/, "\r\e[2K\r") if @quiet
+      s
+    end
+  end
+end
+PROGRESS = Progress.new
 
 def test_check(what)
-  STDERR.print "\nsample/test.rb:#{what} "
+  unless $ntest.zero?
+    PROGRESS.finish
+  end
+  STDERR.print "sample/test.rb:#{what} "
+  PROGRESS.init
   $what = what
   $testnum = 0
 end
@@ -16,10 +101,10 @@ def test_ok(cond,n=1)
   $ntest+=1
   where = (st = caller(n)) ? st[0] : "caller error! (n=#{n}, trace=#{caller(0).join(', ')}"
   if cond
-    STDERR.print "."
+    PROGRESS.pass
     printf "ok %d (%s)\n", $testnum, where
   else
-    STDERR.print "F"
+    PROGRESS.fail
     printf "not ok %s %d -- %s\n", $what, $testnum, where
     $failed+=1
   end
@@ -2259,6 +2344,7 @@ ObjectSpace.each_object{|o|
 
 test_ok true   # reach here or dumps core
 
+PROGRESS.finish
 if $failed > 0
   printf "not ok/test: %d failed %d\n", $ntest, $failed
 else

@@ -70,9 +70,9 @@ USE_RUBYGEMS = $(USE_RUBYGEMS)
 	@echo !endif>> $(MAKEFILE)
 !endif
 
--system-vars-: -runtime- -unicows-
+-system-vars-: -runtime-
 
--system-vars32-: -osname32- -runtime- -unicows-
+-system-vars32-: -osname32- -runtime-
 
 -system-vars64-: -osname64- -runtime-
 
@@ -154,21 +154,6 @@ int main(int argc, char **argv)
 	@.\rtname >>$(MAKEFILE)
 	@del rtname.*
 
--unicows-: nul
-!if "$(ENABLE_WIN95)" == ""
-	@echo Checking unicows.lib
-	@$(CC) -MD <<conftest.c unicows.lib user32.lib > nul && echo>>$(MAKEFILE) ENABLE_WIN95 = yes || rem
-#include <windows.h>
-int main()
-{
-    return GetEnvironmentVariableW(0, 0, 0) == 0;
-}
-<<
-	@del conftest.*
-!else if "$(ENABLE_WIN95)" == "yes"
-	@echo>>$(MAKEFILE) ENABLE_WIN95 = yes
-!endif
-
 -version-: nul
 	@$(APPEND)
 	@$(CPP) -I$(srcdir) -I$(srcdir)/include <<"Creating $(MAKEFILE)" | findstr "=" >>$(MAKEFILE)
@@ -204,6 +189,16 @@ RUBY_SO_NAME = $(RUBY_SO_NAME)
 $(ARCH) = x64
 !elseif "$(PROCESSOR_ARCHITECTURE)" == "IA64"
 $(ARCH) = ia64
+!elseif defined(PROCESSOR_ARCHITEW6432)
+$(BANG)if "$$(TARGET_OS)" == "mswin64"
+!if "$(PROCESSOR_ARCHITECTURE)" == "IA64"
+$(ARCH) = ia64
+!else
+$(ARCH) = x64
+!endif
+$(BANG)else
+$(ARCH) = $(PROCESSOR_ARCHITECTURE)
+$(BANG)endif
 !else
 $(ARCH) = $(PROCESSOR_ARCHITECTURE)
 !endif

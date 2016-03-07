@@ -316,6 +316,15 @@ assert_normal_exit %q{
   end
   begin
     eval "class C; @@h = #{hash.inspect}; end"
-  rescue SystemStackError
   end
 }, '[ruby-core:25714]'
+
+assert_normal_exit %q{
+  begin
+    eval("# encoding:utf-16le\nfoo")
+  rescue Exception => e
+    p e
+    RubyVM::InstructionSequence.compile("p:hello")
+  end
+}, 'check escaping the internal value th->base_block'
+

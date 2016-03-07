@@ -106,15 +106,15 @@ define rp
   else
   if ($flags & RUBY_T_MASK) == RUBY_T_CLASS
     printf "T_CLASS%s: ", ($flags & RUBY_FL_SINGLETON) ? "*" : ""
-    print (struct RClass *)($arg0)
+    rp_class $arg0
   else
   if ($flags & RUBY_T_MASK) == RUBY_T_ICLASS
     printf "T_ICLASS: "
-    print (struct RClass *)($arg0)
+    rp_class $arg0
   else
   if ($flags & RUBY_T_MASK) == RUBY_T_MODULE
     printf "T_MODULE: "
-    print (struct RClass *)($arg0)
+    rp_class $arg0
   else
   if ($flags & RUBY_T_MASK) == RUBY_T_FLOAT
     printf "T_FLOAT: %.16g ", (((struct RFloat*)($arg0))->float_value)
@@ -335,6 +335,19 @@ define rp
 end
 document rp
   Print a Ruby's VALUE.
+end
+
+define rp_class
+  printf "(struct RClass *) %p", (void*)$arg0
+  if ((struct RClass *)($arg0))->ptr.origin != $arg0
+    printf " -> %p", ((struct RClass *)($arg0))->ptr.origin
+  end
+  printf "\n"
+  print *(struct RClass *)($arg0)
+  print *((struct RClass *)($arg0))->ptr
+end
+document rp_class
+  Print the content of a Class/Module.
 end
 
 define nd_type
@@ -625,18 +638,18 @@ define rb_numtable_entry
   set $rb_numtable_key = 0
   set $rb_numtable_rec = 0
   if $rb_numtable_tbl->entries_packed
-    set $rb_numtable_p = $rb_numtable_tbl->bins
-    while $rb_numtable_p && $rb_numtable_p < $rb_numtable_tbl->bins+$rb_numtable_tbl->num_entries
-      if (st_data_t)$rb_numtable_p[0] == $rb_numtable_id
-	set $rb_numtable_key = (st_data_t)$rb_numtable_p[0]
-	set $rb_numtable_rec = (st_data_t)$rb_numtable_p[1]
+    set $rb_numtable_p = $rb_numtable_tbl->as.packed.bins
+    while $rb_numtable_p && $rb_numtable_p < $rb_numtable_tbl->as.packed.bins+$rb_numtable_tbl->num_entries
+      if $rb_numtable_p.k == $rb_numtable_id
+	set $rb_numtable_key = $rb_numtable_p.k
+	set $rb_numtable_rec = $rb_numtable_p.v
 	set $rb_numtable_p = 0
       else
-	set $rb_numtable_p = $rb_numtable_p + 2
+	set $rb_numtable_p = $rb_numtable_p + 1
       end
     end
   else
-    set $rb_numtable_p = $rb_numtable_tbl->bins[$rb_numtable_id % $rb_numtable_tbl->num_bins]
+    set $rb_numtable_p = $rb_numtable_tbl->as.big.bins[$rb_numtable_id % $rb_numtable_tbl->num_bins]
     while $rb_numtable_p
       if $rb_numtable_p->key == $rb_numtable_id
 	set $rb_numtable_key = $rb_numtable_p->key
@@ -689,6 +702,17 @@ define rb_classname
   print *(struct RClass*)($arg0)
 end
 
+define rb_ancestors
+  set $rb_ancestors_module = $arg0
+  while $rb_ancestors_module
+    rp $rb_ancestors_module
+    set $rb_ancestors_module = ((struct RClass *)($rb_ancestors_module))->ptr.super
+  end
+end
+document rb_ancestors
+  Print ancestors.
+end
+
 define rb_backtrace
   call rb_backtrace()
 end
@@ -731,8 +755,8 @@ define rb_ps_vm
   if $ps_threads->entries_packed
     set $ps_threads_i = 0
     while $ps_threads_i < $ps_threads->num_entries
-      set $ps_threads_key = (st_data_t)$ps_threads->bins[$ps_threads_i * 2]
-      set $ps_threads_val = (st_data_t)$ps_threads->bins[$ps_threads_i * 2 + 1]
+      set $ps_threads_key = (st_data_t)$ps_threads->as.packed.entries[$ps_threads_i].key
+      set $ps_threads_val = (st_data_t)$ps_threads->as.packed.entries[$ps_threads_i].val
       rb_ps_thread $ps_threads_key $ps_threads_val
       set $ps_threads_i = $ps_threads_i + 1
     end
@@ -755,3 +779,20 @@ define rb_ps_thread
   set $ps_thread_id = $arg1
   print $ps_thread_th = (rb_thread_t*)$ps_thread->data
 end
+
+# Details: https://bugs.ruby-lang.org/projects/ruby-trunk/wiki/MachineInstructionsTraceWithGDB
+define trace_machine_instructions
+  set logging on
+  set height 0
+  set width 0
+  display/i $pc
+  while !$exit_code
+    info line *$pc
+    si
+  end
+end
+
+define SDR
+  call rb_vmdebug_stack_dump_raw_current()
+end
+

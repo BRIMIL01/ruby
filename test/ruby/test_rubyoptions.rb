@@ -121,9 +121,17 @@ class TestRubyOptions < Test::Unit::TestCase
     assert_in_out_err(%w(-KU), "p '\u3042'") do |r, e|
       assert_equal("\"\u3042\"", r.join.force_encoding(Encoding::UTF_8))
     end
-    assert_in_out_err(%w(-KE -e) + [""], "", [], [])
-    assert_in_out_err(%w(-KS -e) + [""], "", [], [])
-    assert_in_out_err(%w(-KN -e) + [""], "", [], [])
+    line = '-eputs"\xc2\xa1".encoding'
+    env = {'RUBYOPT' => nil}
+    assert_in_out_err([env, '-Ke', line], "", ["EUC-JP"], [])
+    assert_in_out_err([env, '-KE', line], "", ["EUC-JP"], [])
+    assert_in_out_err([env, '-Ks', line], "", ["Windows-31J"], [])
+    assert_in_out_err([env, '-KS', line], "", ["Windows-31J"], [])
+    assert_in_out_err([env, '-Ku', line], "", ["UTF-8"], [])
+    assert_in_out_err([env, '-KU', line], "", ["UTF-8"], [])
+    assert_in_out_err([env, '-Kn', line], "", ["ASCII-8BIT"], [])
+    assert_in_out_err([env, '-KN', line], "", ["ASCII-8BIT"], [])
+    assert_in_out_err([env, '-wKe', line], "", ["EUC-JP"], /-K/)
   end
 
   def test_version
@@ -287,7 +295,7 @@ class TestRubyOptions < Test::Unit::TestCase
     assert_in_out_err([], "#! /test_r_u_b_y_test_r_u_b_y_options_foobarbazqux -foo -bar\r\np 1\r\n",
                       [], /: no Ruby script found in input/)
 
-    assert_in_out_err([], "#!ruby -KU -Eutf-8\r\np \"\u3042\"\r\n") do |r, e|
+    assert_in_out_err([{'RUBYOPT' => nil}], "#!ruby -KU -Eutf-8\r\np \"\u3042\"\r\n") do |r, e|
       assert_equal("\"\u3042\"", r.join.force_encoding(Encoding::UTF_8))
       assert_equal([], e)
     end
@@ -418,7 +426,7 @@ class TestRubyOptions < Test::Unit::TestCase
   end
 
   def test_set_program_name
-    skip "platform dependent feature" if /linux|freebsd|netbsd|openbsd/ !~ RUBY_PLATFORM
+    skip "platform dependent feature" if /linux|freebsd|netbsd|openbsd|darwin/ !~ RUBY_PLATFORM
 
     with_tmpchdir do
       write_file("test-script", "$0 = 'hello world'; sleep 60")
@@ -489,6 +497,8 @@ class TestRubyOptions < Test::Unit::TestCase
     assert_in_out_err(["-we", "1.times do\n  a=1\nend"], "", [], [], feature3446)
     assert_in_out_err(["-we", "def foo\n  1.times do\n    a=1\n  end\nend"], "", [], ["-e:3: warning: assigned but unused variable - a"], feature3446)
     assert_in_out_err(["-we", "def foo\n""  1.times do |a| end\n""end"], "", [], [])
+    feature6693 = '[ruby-core:46160]'
+    assert_in_out_err(["-we", "def foo\n  _a=1\nend"], "", [], [], feature6693)
   end
 
   def test_shadowing_variable
@@ -500,6 +510,9 @@ class TestRubyOptions < Test::Unit::TestCase
                       ["-e:3: warning: shadowing outer local variable - a",
                        "-e:2: warning: assigned but unused variable - a",
                       ], bug4130)
+    feature6693 = '[ruby-core:46160]'
+    assert_in_out_err(["-we", "def foo\n""  _a=1\n""  1.times do |_a| end\n""end"],
+                      "", [], [], feature6693)
   end
 
   def test_script_from_stdin
@@ -514,7 +527,7 @@ class TestRubyOptions < Test::Unit::TestCase
     IO.pipe {|r, w|
       begin
         PTY.open {|m, s|
-          m.echo = false
+          s.echo = false
           m.print("\C-d")
           pid = spawn(EnvUtil.rubybin, :in => s, :out => w)
           w.close
@@ -530,7 +543,7 @@ class TestRubyOptions < Test::Unit::TestCase
     assert_equal("", result, '[ruby-dev:37798]')
     IO.pipe {|r, w|
       PTY.open {|m, s|
-	m.echo = false
+	s.echo = false
 	pid = spawn(EnvUtil.rubybin, :in => s, :out => w)
 	w.close
 	m.print("$stdin.read; p $stdin.gets\n\C-d")
@@ -552,5 +565,10 @@ class TestRubyOptions < Test::Unit::TestCase
       File.unlink(File.join(dir, a))
       assert_in_out_err(["-C", dir, a], "", [], /LoadError/, bug3851)
     end
+  end
+
+  def test_script_is_directory
+    feature2408 = '[ruby-core:26925]'
+    assert_in_out_err(%w[.], "", [], /Is a directory -- \./, feature2408)
   end
 end

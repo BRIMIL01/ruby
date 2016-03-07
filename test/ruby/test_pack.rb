@@ -496,6 +496,10 @@ class TestPack < Test::Unit::TestCase
     assert_equal("M86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A\n!80``\n", ["a"*46].pack("u0"))
     assert_equal("M86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A\n!80``\n", ["a"*46].pack("u1"))
     assert_equal("M86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A\n!80``\n", ["a"*46].pack("u2"))
+    assert_equal(<<EXPECTED, ["a"*80].pack("u68"))
+_86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A86%A
+186%A86%A86%A86%A86%A86$`
+EXPECTED
 
     assert_equal([""], "".unpack("u"))
     assert_equal(["a"], "!80``\n".unpack("u"))
@@ -568,10 +572,18 @@ class TestPack < Test::Unit::TestCase
     assert_equal(["a"*1023], (("a"*73+"=\n")*14+"a=\n").unpack("M"))
     assert_equal(["\x0a"], "=0a=\n".unpack("M"))
     assert_equal(["\x0a"], "=0A=\n".unpack("M"))
-    assert_equal([""], "=0Z=\n".unpack("M"))
-    assert_equal([""], "=\r\n".unpack("M"))
+    assert_equal(["=0Z=\n"], "=0Z=\n".unpack("M"))
     assert_equal([""], "=\r\n".unpack("M"))
     assert_equal(["\xC6\xF7"], "=C6=F7".unpack('M*'))
+
+    assert_equal(["pre123after"], "pre=31=32=33after".unpack("M"))
+    assert_equal(["preafter"], "pre=\nafter".unpack("M"))
+    assert_equal(["preafter"], "pre=\r\nafter".unpack("M"))
+    assert_equal(["pre="], "pre=".unpack("M"))
+    assert_equal(["pre=\r"], "pre=\r".unpack("M"))
+    assert_equal(["pre=hoge"], "pre=hoge".unpack("M"))
+    assert_equal(["pre==31after"], "pre==31after".unpack("M"))
+    assert_equal(["pre===31after"], "pre===31after".unpack("M"))
   end
 
   def test_pack_unpack_P2
@@ -639,4 +651,43 @@ class TestPack < Test::Unit::TestCase
     assert_nil("".unpack("i") {|x| result = x}, bug4059)
     assert_equal(:ok, result)
   end
+
+  def test_pack_garbage
+    verbose = $VERBOSE
+    $VERBOSE = false
+
+    assert_silent do
+      assert_equal "\000", [0].pack("*U")
+    end
+
+    $VERBOSE = true
+
+    _, err = capture_io do
+      assert_equal "\000", [0].pack("*U")
+    end
+
+    assert_match %r%unknown pack directive '\*' in '\*U'$%, err
+  ensure
+    $VERBOSE = verbose
+  end
+
+  def test_unpack_garbage
+    verbose = $VERBOSE
+    $VERBOSE = false
+
+    assert_silent do
+      assert_equal [0], "\000".unpack("*U")
+    end
+
+    $VERBOSE = true
+
+    _, err = capture_io do
+      assert_equal [0], "\000".unpack("*U")
+    end
+
+    assert_match %r%unknown unpack directive '\*' in '\*U'$%, err
+  ensure
+    $VERBOSE = verbose
+  end
+
 end

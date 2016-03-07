@@ -39,6 +39,62 @@ if defined? Zlib
       assert_raise(Zlib::StreamError) { Zlib::Deflate.deflate("foo", 10000) }
     end
 
+    def test_deflate_chunked
+      original = ''
+      chunks = []
+      r = Random.new 0
+
+      z = Zlib::Deflate.new
+
+      2.times do
+        input = r.bytes(20000)
+        original << input
+        z.deflate(input) do |chunk|
+          chunks << chunk
+        end
+      end
+
+      assert_equal [16384, 16384],
+                   chunks.map { |chunk| chunk.length }
+
+      final = z.finish
+
+      assert_equal 7253, final.length
+
+      chunks << final
+      all = chunks.join
+
+      inflated = Zlib.inflate all
+
+      assert_equal original, inflated
+    end
+
+    def test_deflate_chunked_break
+      chunks = []
+      r = Random.new 0
+
+      z = Zlib::Deflate.new
+
+      input = r.bytes(20000)
+      z.deflate(input) do |chunk|
+        chunks << chunk
+        break
+      end
+
+      assert_equal [16384], chunks.map { |chunk| chunk.length }
+
+      final = z.finish
+
+      assert_equal 3632, final.length
+
+      all = chunks.join
+      all << final
+
+      original = Zlib.inflate all
+
+      assert_equal input, original
+    end
+
     def test_addstr
       z = Zlib::Deflate.new
       z << "foo"
@@ -185,6 +241,55 @@ if defined? Zlib
       assert_equal("foo", z.finish)
     end
 
+    def test_add_dictionary
+      dictionary = "foo"
+
+      deflate = Zlib::Deflate.new
+      deflate.set_dictionary dictionary
+      compressed = deflate.deflate "foofoofoo", Zlib::FINISH
+      deflate.close
+
+      out = nil
+      inflate = Zlib::Inflate.new
+      inflate.add_dictionary "foo"
+
+      out = inflate.inflate compressed
+
+      assert_equal "foofoofoo", out
+    end
+
+    def test_finish_chunked
+      # zeros = Zlib::Deflate.deflate("0" * 100_000)
+      zeros = "x\234\355\3011\001\000\000\000\302\240J\353\237\316\032\036@" \
+              "\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\257\006\351\247BH"
+
+      chunks = []
+
+      z = Zlib::Inflate.new
+
+      z.inflate(zeros) do |chunk|
+        chunks << chunk
+        break
+      end
+
+      z.finish do |chunk|
+        chunks << chunk
+      end
+
+      assert_equal [16384, 16384, 16384, 16384, 16384, 16384, 1696],
+                   chunks.map { |chunk| chunk.size }
+
+      assert chunks.all? { |chunk|
+        chunk =~ /\A0+\z/
+      }
+    end
+
     def test_inflate
       s = Zlib::Deflate.deflate("foo")
       z = Zlib::Inflate.new
@@ -193,6 +298,100 @@ if defined? Zlib
       assert_equal("foo", s)
       z.inflate("foo") # ???
       z << "foo" # ???
+    end
+
+    def test_inflate_partial_input
+      deflated = Zlib::Deflate.deflate "\0"
+
+      a = deflated[0...2]
+      b = deflated[2..-1]
+
+      z = Zlib::Inflate.new
+
+      inflated = ""
+
+      deflated.each_char do |byte|
+        inflated << z.inflate(byte)
+      end
+
+      inflated << z.finish
+
+      assert_equal "\0", inflated
+    end
+
+    def test_inflate_chunked
+      # s = Zlib::Deflate.deflate("0" * 100_000)
+      zeros = "x\234\355\3011\001\000\000\000\302\240J\353\237\316\032\036@" \
+              "\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\257\006\351\247BH"
+
+      chunks = []
+
+      z = Zlib::Inflate.new
+
+      z.inflate(zeros) do |chunk|
+        chunks << chunk
+      end
+
+      assert_equal [16384, 16384, 16384, 16384, 16384, 16384, 1696],
+                   chunks.map { |chunk| chunk.size }
+
+      assert chunks.all? { |chunk|
+        chunk =~ /\A0+\z/
+      }
+    end
+
+    def test_inflate_chunked_break
+      # zeros = Zlib::Deflate.deflate("0" * 100_000)
+      zeros = "x\234\355\3011\001\000\000\000\302\240J\353\237\316\032\036@" \
+              "\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+              "\000\000\000\000\000\000\000\257\006\351\247BH"
+
+      chunks = []
+
+      z = Zlib::Inflate.new
+
+      z.inflate(zeros) do |chunk|
+        chunks << chunk
+        break
+      end
+
+      out = z.inflate nil
+
+      assert_equal 100_000 - chunks.first.length, out.length
+    end
+
+    def test_inflate_dictionary
+      dictionary = "foo"
+
+      deflate = Zlib::Deflate.new
+      deflate.set_dictionary dictionary
+      compressed = deflate.deflate "foofoofoo", Zlib::FINISH
+      deflate.close
+
+      out = nil
+      inflate = Zlib::Inflate.new
+
+      begin
+        out = inflate.inflate compressed
+
+        flunk "Zlib::NeedDict was not raised"
+      rescue Zlib::NeedDict
+        inflate.set_dictionary dictionary
+        out = inflate.inflate ""
+      end
+
+      assert_equal "foofoofoo", out
     end
 
     def test_sync
@@ -691,8 +890,39 @@ if defined? Zlib
       t.close
       Zlib::GzipWriter.open(t.path) {|gz| gz.print("foo") }
       f = open(t.path)
+      f.binmode
       assert_equal("foo", Zlib::GzipReader.wrap(f) {|gz| gz.read })
       assert_raise(IOError) { f.close }
+    end
+
+    def test_corrupted_header
+      gz = Zlib::GzipWriter.new(StringIO.new(s = ""))
+      gz.orig_name = "X"
+      gz.comment = "Y"
+      gz.print("foo")
+      gz.finish
+      # 14: magic(2) + method(1) + flag(1) + mtime(4) + exflag(1) + os(1) + orig_name(2) + comment(2)
+      1.upto(14) do |idx|
+        assert_raise(Zlib::GzipFile::Error, idx) do
+          Zlib::GzipReader.new(StringIO.new(s[0, idx])).read
+        end
+      end
+    end
+
+    def test_encoding
+      t = Tempfile.new("test_zlib_gzip_reader_encoding")
+      t.binmode
+      content = (0..255).to_a.pack('c*')
+      Zlib::GzipWriter.wrap(t) {|gz| gz.print(content) }
+      t.close
+
+      read_all = Zlib::GzipReader.open(t.path) {|gz| gz.read }
+      assert_equal(Encoding.default_external, read_all.encoding)
+
+      # chunks are in BINARY regardless of encoding settings
+      read_size = Zlib::GzipReader.open(t.path) {|gz| gz.read(1024) }
+      assert_equal(Encoding::ASCII_8BIT, read_size.encoding)
+      assert_equal(content, read_size)
     end
   end
 
@@ -746,6 +976,7 @@ if defined? Zlib
 
     def test_writer_wrap
       t = Tempfile.new("test_zlib_gzip_writer_wrap")
+      t.binmode
       Zlib::GzipWriter.wrap(t) {|gz| gz.print("foo") }
       t.close
       assert_equal("foo", Zlib::GzipReader.open(t.path) {|gz| gz.read })
@@ -797,5 +1028,26 @@ if defined? Zlib
       assert_instance_of(Array, t)
       t.each {|x| assert_kind_of(Integer, x) }
     end
+
+    def test_inflate
+      TestZlibInflate.new(__name__).test_inflate
+    end
+
+    def test_deflate
+      TestZlibDeflate.new(__name__).test_deflate
+    end
+
+    def test_deflate_stream
+      r = Random.new 0
+
+      deflated = ''
+
+      Zlib.deflate(r.bytes(20000)) do |chunk|
+        deflated << chunk
+      end
+
+      assert_equal 20016, deflated.length
+    end
+
   end
 end

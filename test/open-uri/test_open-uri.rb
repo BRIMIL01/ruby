@@ -2,7 +2,10 @@ require 'test/unit'
 require 'open-uri'
 require 'webrick'
 require 'webrick/httpproxy'
-require 'zlib'
+begin
+  require 'zlib'
+rescue LoadError
+end
 
 class TestOpenURI < Test::Unit::TestCase
 
@@ -21,10 +24,13 @@ class TestOpenURI < Test::Unit::TestCase
         :Port => 0})
       _, port, _, host = srv.listeners[0].addr
       begin
-        th = srv.start
+        srv.start
         yield srv, dr, "http://#{host}:#{port}"
       ensure
         srv.shutdown
+        until srv.status == :Stop
+          sleep 0.1
+        end
       end
     }
   end
@@ -52,7 +58,7 @@ class TestOpenURI < Test::Unit::TestCase
 
   def test_200
     with_http {|srv, dr, url|
-      open("#{dr}/foo200", "w") {|f| f << "foo200" }
+      srv.mount_proc("/foo200", lambda { |req, res| res.body = "foo200" } )
       open("#{url}/foo200") {|f|
         assert_equal("200", f.status[0])
         assert_equal("foo200", f.read)
@@ -63,7 +69,7 @@ class TestOpenURI < Test::Unit::TestCase
   def test_200big
     with_http {|srv, dr, url|
       content = "foo200big"*10240
-      open("#{dr}/foo200big", "w") {|f| f << content }
+      srv.mount_proc("/foo200big", lambda { |req, res| res.body = content } )
       open("#{url}/foo200big") {|f|
         assert_equal("200", f.status[0])
         assert_equal(content, f.read)
@@ -80,7 +86,7 @@ class TestOpenURI < Test::Unit::TestCase
 
   def test_open_uri
     with_http {|srv, dr, url|
-      open("#{dr}/foo_ou", "w") {|f| f << "foo_ou" }
+      srv.mount_proc("/foo_ou", lambda { |req, res| res.body = "foo_ou" } )
       u = URI("#{url}/foo_ou")
       open(u) {|f|
         assert_equal("200", f.status[0])
@@ -110,7 +116,7 @@ class TestOpenURI < Test::Unit::TestCase
         end
       }
       begin
-        assert_raise(Timeout::Error) { URI("http://127.0.0.1:#{port}/foo/bar").read(:read_timeout=>0.01) }
+        assert_raise(Net::ReadTimeout) { URI("http://127.0.0.1:#{port}/foo/bar").read(:read_timeout=>0.01) }
       ensure
         Thread.kill(th)
         th.join
@@ -124,7 +130,7 @@ class TestOpenURI < Test::Unit::TestCase
 
   def test_mode
     with_http {|srv, dr, url|
-      open("#{dr}/mode", "w") {|f| f << "mode" }
+      srv.mount_proc("/mode", lambda { |req, res| res.body = "mode" } )
       open("#{url}/mode", "r") {|f|
         assert_equal("200", f.status[0])
         assert_equal("mode", f.read)
@@ -146,13 +152,13 @@ class TestOpenURI < Test::Unit::TestCase
 
   def test_without_block
     with_http {|srv, dr, url|
-      open("#{dr}/without_block", "w") {|g| g << "without_block" }
+      srv.mount_proc("/without_block", lambda { |req, res| res.body = "without_block" } )
       begin
         f = open("#{url}/without_block")
         assert_equal("200", f.status[0])
         assert_equal("without_block", f.read)
       ensure
-        f.close
+        f.close if f && !f.closed?
       end
     }
   end
@@ -196,8 +202,8 @@ class TestOpenURI < Test::Unit::TestCase
       _, proxy_port, _, proxy_host = proxy.listeners[0].addr
       proxy_url = "http://#{proxy_host}:#{proxy_port}/"
       begin
-        th = proxy.start
-        open("#{dr}/proxy", "w") {|f| f << "proxy" }
+        proxy.start
+        srv.mount_proc("/proxy", lambda { |req, res| res.body = "proxy" } )
         open("#{url}/proxy", :proxy=>proxy_url) {|f|
           assert_equal("200", f.status[0])
           assert_equal("proxy", f.read)
@@ -249,8 +255,8 @@ class TestOpenURI < Test::Unit::TestCase
       _, proxy_port, _, proxy_host = proxy.listeners[0].addr
       proxy_url = "http://#{proxy_host}:#{proxy_port}/"
       begin
-        th = proxy.start
-        open("#{dr}/proxy", "w") {|f| f << "proxy" }
+        proxy.start
+        srv.mount_proc("/proxy", lambda { |req, res| res.body = "proxy" } )
         exc = assert_raise(OpenURI::HTTPError) { open("#{url}/proxy", :proxy=>proxy_url) {} }
         assert_equal("407", exc.io.status[0])
         assert_match(/#{Regexp.quote url}/, log); log.clear
@@ -419,7 +425,7 @@ class TestOpenURI < Test::Unit::TestCase
 
   def test_uri_read
     with_http {|srv, dr, url|
-      open("#{dr}/uriread", "w") {|f| f << "uriread" }
+      srv.mount_proc("/uriread", lambda { |req, res| res.body = "uriread" } )
       data = URI("#{url}/uriread").read
       assert_equal("200", data.status[0])
       assert_equal("uriread", data)
@@ -482,56 +488,21 @@ class TestOpenURI < Test::Unit::TestCase
       srv.mount_proc("/data2/") {|req, res| res.body = content_gz; res['content-encoding'] = 'gzip'; res.chunked = true }
       srv.mount_proc("/noce/") {|req, res| res.body = content_gz }
       open("#{url}/data/") {|f|
-        assert_equal ['gzip'], f.content_encoding
-        assert_equal(content_gz, f.read.force_encoding("ascii-8bit"))
+        assert_equal [], f.content_encoding
+        assert_equal(content, f.read)
       }
       open("#{url}/data2/") {|f|
-        assert_equal ['gzip'], f.content_encoding
-        assert_equal(content_gz, f.read.force_encoding("ascii-8bit"))
+        assert_equal [], f.content_encoding
+        assert_equal(content, f.read)
       }
       open("#{url}/noce/") {|f|
         assert_equal [], f.content_encoding
         assert_equal(content_gz, f.read.force_encoding("ascii-8bit"))
       }
     }
-  end
+  end if defined?(Zlib::GzipWriter)
 
   # 192.0.2.0/24 is TEST-NET.  [RFC3330]
-
-  def test_find_proxy
-    assert_nil(URI("http://192.0.2.1/").find_proxy)
-    assert_nil(URI("ftp://192.0.2.1/").find_proxy)
-    with_env('http_proxy'=>'http://127.0.0.1:8080') {
-      assert_equal(URI('http://127.0.0.1:8080'), URI("http://192.0.2.1/").find_proxy)
-      assert_nil(URI("ftp://192.0.2.1/").find_proxy)
-    }
-    with_env('ftp_proxy'=>'http://127.0.0.1:8080') {
-      assert_nil(URI("http://192.0.2.1/").find_proxy)
-      assert_equal(URI('http://127.0.0.1:8080'), URI("ftp://192.0.2.1/").find_proxy)
-    }
-    with_env('REQUEST_METHOD'=>'GET') {
-      assert_nil(URI("http://192.0.2.1/").find_proxy)
-    }
-    with_env('CGI_HTTP_PROXY'=>'http://127.0.0.1:8080', 'REQUEST_METHOD'=>'GET') {
-      assert_equal(URI('http://127.0.0.1:8080'), URI("http://192.0.2.1/").find_proxy)
-    }
-    with_env('http_proxy'=>'http://127.0.0.1:8080', 'no_proxy'=>'192.0.2.2') {
-      assert_equal(URI('http://127.0.0.1:8080'), URI("http://192.0.2.1/").find_proxy)
-      assert_nil(URI("http://192.0.2.2/").find_proxy)
-    }
-  end
-
-  def test_find_proxy_case_sensitive_env
-    with_env('http_proxy'=>'http://127.0.0.1:8080', 'REQUEST_METHOD'=>'GET') {
-      assert_equal(URI('http://127.0.0.1:8080'), URI("http://192.0.2.1/").find_proxy)
-    }
-    with_env('HTTP_PROXY'=>'http://127.0.0.1:8081', 'REQUEST_METHOD'=>'GET') {
-      assert_nil(nil, URI("http://192.0.2.1/").find_proxy)
-    }
-    with_env('http_proxy'=>'http://127.0.0.1:8080', 'HTTP_PROXY'=>'http://127.0.0.1:8081', 'REQUEST_METHOD'=>'GET') {
-      assert_equal(URI('http://127.0.0.1:8080'), URI("http://192.0.2.1/").find_proxy)
-    }
-  end unless RUBY_PLATFORM =~ /mswin|mingw/
 
   def test_ftp_invalid_request
     assert_raise(ArgumentError) { URI("ftp://127.0.0.1/").read }
@@ -555,7 +526,7 @@ class TestOpenURI < Test::Unit::TestCase
           assert_equal("CWD foo\r\n", s.gets); s.print "250 CWD successful\r\n"
           assert_equal("PASV\r\n", s.gets)
           TCPServer.open("127.0.0.1", 0) {|data_serv|
-            _, data_serv_port, _, data_serv_host = data_serv.addr
+            _, data_serv_port, _, _ = data_serv.addr
             hi = data_serv_port >> 8
             lo = data_serv_port & 0xff
             s.print "227 Entering Passive Mode (127,0,0,1,#{hi},#{lo}).\r\n"
@@ -638,7 +609,7 @@ class TestOpenURI < Test::Unit::TestCase
           assert_equal("SIZE bar\r\n", s.gets); s.print "213 #{content.bytesize}\r\n"
           assert_equal("PASV\r\n", s.gets)
           TCPServer.open("127.0.0.1", 0) {|data_serv|
-            _, data_serv_port, _, data_serv_host = data_serv.addr
+            _, data_serv_port, _, _ = data_serv.addr
             hi = data_serv_port >> 8
             lo = data_serv_port & 0xff
             s.print "227 Entering Passive Mode (127,0,0,1,#{hi},#{lo}).\r\n"

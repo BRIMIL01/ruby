@@ -1,5 +1,5 @@
 /*
-  date_parse.c: Coded by Tadayoshi Funaba 2011
+  date_parse.c: Coded by Tadayoshi Funaba 2011,2012
 */
 
 #include "ruby.h"
@@ -89,10 +89,10 @@ s3e(VALUE hash, VALUE y, VALUE m, VALUE d, int bc)
 	size_t l;
 
 	s = RSTRING_PTR(y);
-	while (!issign(*s) && !isdigit(*s))
+	while (!issign((unsigned char)*s) && !isdigit((unsigned char)*s))
 	    s++;
 	bp = s;
-	if (issign(*s))
+	if (issign((unsigned char)*s))
 	    s++;
 	l = strspn(s, "0123456789");
 	ep = s + l;
@@ -138,7 +138,7 @@ s3e(VALUE hash, VALUE y, VALUE m, VALUE d, int bc)
 	VALUE iy;
 
 	s = RSTRING_PTR(y);
-	while (!issign(*s) && !isdigit(*s))
+	while (!issign((unsigned char)*s) && !isdigit((unsigned char)*s))
 	    s++;
 	bp = s;
 	if (issign(*s)) {
@@ -154,7 +154,7 @@ s3e(VALUE hash, VALUE y, VALUE m, VALUE d, int bc)
 	{
 	    char *buf;
 
-	    buf = ALLOC_N(char, ep - bp + 1);
+	    buf = ALLOCA_N(char, ep - bp + 1);
 	    memcpy(buf, bp, ep - bp);
 	    buf[ep - bp] = '\0';
 	    iy = cstr2num(buf);
@@ -170,7 +170,7 @@ s3e(VALUE hash, VALUE y, VALUE m, VALUE d, int bc)
 	VALUE im;
 
 	s = RSTRING_PTR(m);
-	while (!isdigit(*s))
+	while (!isdigit((unsigned char)*s))
 	    s++;
 	bp = s;
 	l = strspn(s, "0123456789");
@@ -178,7 +178,7 @@ s3e(VALUE hash, VALUE y, VALUE m, VALUE d, int bc)
 	{
 	    char *buf;
 
-	    buf = ALLOC_N(char, ep - bp + 1);
+	    buf = ALLOCA_N(char, ep - bp + 1);
 	    memcpy(buf, bp, ep - bp);
 	    buf[ep - bp] = '\0';
 	    im = cstr2num(buf);
@@ -192,7 +192,7 @@ s3e(VALUE hash, VALUE y, VALUE m, VALUE d, int bc)
 	VALUE id;
 
 	s = RSTRING_PTR(d);
-	while (!isdigit(*s))
+	while (!isdigit((unsigned char)*s))
 	    s++;
 	bp = s;
 	l = strspn(s, "0123456789");
@@ -200,7 +200,7 @@ s3e(VALUE hash, VALUE y, VALUE m, VALUE d, int bc)
 	{
 	    char *buf;
 
-	    buf = ALLOC_N(char, ep - bp + 1);
+	    buf = ALLOCA_N(char, ep - bp + 1);
 	    memcpy(buf, bp, ep - bp);
 	    buf[ep - bp] = '\0';
 	    id = cstr2num(buf);
@@ -235,6 +235,26 @@ regcomp(const char *source, long len, int opt)
 
 #define REGCOMP_0(pat) REGCOMP(pat, 0)
 #define REGCOMP_I(pat) REGCOMP(pat, ONIG_OPTION_IGNORECASE)
+
+#define MATCH(s,p,c) \
+{ \
+    return match(s, p, hash, c); \
+}
+
+static int
+match(VALUE str, VALUE pat, VALUE hash, int (*cb)(VALUE, VALUE))
+{
+    VALUE m;
+
+    m = f_match(pat, str);
+
+    if (NIL_P(m))
+	return 0;
+
+    (*cb)(m, hash);
+
+    return 1;
+}
 
 #define SUBS(s,p,c) \
 { \
@@ -358,17 +378,17 @@ date_zone_to_diff(VALUE str)
     l = RSTRING_LEN(str);
     s = RSTRING_PTR(str);
 
-    dest = d = ALLOC_N(char, l + 1);
+    dest = d = ALLOCA_N(char, l + 1);
 
     for (i = 0; i < l; i++) {
-	if (isspace(s[i]) || s[i] == '\0') {
+	if (isspace((unsigned char)s[i]) || s[i] == '\0') {
 	    if (!sp)
 		*d++ = ' ';
 	    sp = 1;
 	}
 	else {
-	    if (isalpha(s[i]))
-		*d++ = tolower(s[i]);
+	    if (isalpha((unsigned char)s[i]))
+		*d++ = tolower((unsigned char)s[i]);
 	    else
 		*d++ = s[i];
 	    sp = 0;
@@ -392,10 +412,10 @@ date_zone_to_diff(VALUE str)
 	dl = RSTRING_LEN(str) - (sizeof DST - 1);
 	ds = RSTRING_PTR(str) + dl;
 
-	if (strcmp(ss, STD) == 0) {
+	if (sl >= 0 && strcmp(ss, STD) == 0) {
 	    str = rb_str_new(RSTRING_PTR(str), sl);
 	}
-	else if (strcmp(ds, DST) == 0) {
+	else if (dl >= 0 && strcmp(ds, DST) == 0) {
 	    str = rb_str_new(RSTRING_PTR(str), dl);
 	    dst = 1;
 	}
@@ -409,7 +429,7 @@ date_zone_to_diff(VALUE str)
 	    dl = RSTRING_LEN(str) - (sizeof DST - 1);
 	    ds = RSTRING_PTR(str) + dl;
 
-	    if (strcmp(ds, DST) == 0) {
+	    if (dl >= 0 && strcmp(ds, DST) == 0) {
 		str = rb_str_new(RSTRING_PTR(str), dl);
 		dst = 1;
 	    }
@@ -441,8 +461,10 @@ date_zone_to_diff(VALUE str)
 	    char *s, *p;
 	    VALUE sign;
 	    VALUE hour = Qnil, min = Qnil, sec = Qnil;
+	    VALUE str_orig;
 
 	    s = RSTRING_PTR(str);
+	    str_orig = str;
 
 	    if (strncmp(s, "gmt", 3) == 0 ||
 		strncmp(s, "utc", 3) == 0)
@@ -467,12 +489,13 @@ date_zone_to_diff(VALUE str)
 		    }
 		    else
 			min = rb_str_new2(s);
+		    RB_GC_GUARD(str_orig);
 		    goto num;
 		}
 		if (strpbrk(RSTRING_PTR(str), ",.")) {
 		    char *a, *b;
 
-		    a = ALLOC_N(char, RSTRING_LEN(str) + 1);
+		    a = ALLOCA_N(char, RSTRING_LEN(str) + 1);
 		    strcpy(a, RSTRING_PTR(str));
 		    b = strpbrk(a, ",.");
 		    *b = '\0';
@@ -530,6 +553,7 @@ date_zone_to_diff(VALUE str)
 	    }
 	}
     }
+    RB_GC_GUARD(str);
   ok:
     return offset;
 }
@@ -1323,6 +1347,7 @@ parse_ddd_cb(VALUE m, VALUE hash)
 	}
 	break;
     }
+    RB_GC_GUARD(s2);
     if (!NIL_P(s3)) {
 	cs3 = RSTRING_PTR(s3);
 	l3 = RSTRING_LEN(s3);
@@ -1353,6 +1378,7 @@ parse_ddd_cb(VALUE m, VALUE hash)
 		break;
 	    }
 	}
+	RB_GC_GUARD(s3);
     }
     if (!NIL_P(s4)) {
 	l4 = RSTRING_LEN(s4);
@@ -1368,7 +1394,7 @@ parse_ddd_cb(VALUE m, VALUE hash)
 	set_hash("zone", s5);
 
 	if (*cs5 == '[') {
-	    char *buf = ALLOC_N(char, l5 + 1);
+	    char *buf = ALLOCA_N(char, l5 + 1);
 	    char *s1, *s2, *s3;
 	    VALUE zone;
 
@@ -1387,10 +1413,11 @@ parse_ddd_cb(VALUE m, VALUE hash)
 		s3 = s1;
 	    zone = rb_str_new2(s3);
 	    set_hash("zone", zone);
-	    if (isdigit(*s1))
+	    if (isdigit((unsigned char)*s1))
 		*--s1 = '+';
 	    set_hash("offset", date_zone_to_diff(rb_str_new2(s1)));
 	}
+	RB_GC_GUARD(s5);
     }
 
     return 1;
@@ -1493,9 +1520,9 @@ check_class(VALUE s)
 
     flags = 0;
     for (i = 0; i < RSTRING_LEN(s); i++) {
-	if (isalpha(RSTRING_PTR(s)[i]))
+	if (isalpha((unsigned char)RSTRING_PTR(s)[i]))
 	    flags |= HAVE_ALPHA;
-	if (isdigit(RSTRING_PTR(s)[i]))
+	if (isdigit((unsigned char)RSTRING_PTR(s)[i]))
 	    flags |= HAVE_DIGIT;
 	if (RSTRING_PTR(s)[i] == '-')
 	    flags |= HAVE_DASH;
@@ -1521,8 +1548,8 @@ date__parse(VALUE str, VALUE comp)
 	static const char pat_source[] = "[^-+',./:@[:alnum:]\\[\\]]+";
 	static VALUE pat = Qnil;
 
-	str = rb_str_dup(str);
 	REGCOMP_0(pat);
+	str = rb_str_dup(str);
 	f_gsub_bang(str, pat, asp_string());
     }
 
@@ -1719,7 +1746,7 @@ iso8601_ext_datetime(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, iso8601_ext_datetime_cb);
+    MATCH(str, pat, iso8601_ext_datetime_cb);
 }
 
 #undef SNUM
@@ -1810,7 +1837,7 @@ iso8601_bas_datetime(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, iso8601_bas_datetime_cb);
+    MATCH(str, pat, iso8601_bas_datetime_cb);
 }
 
 #undef SNUM
@@ -1853,7 +1880,7 @@ iso8601_ext_time(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, iso8601_ext_time_cb);
+    MATCH(str, pat, iso8601_ext_time_cb);
 }
 
 static int
@@ -1865,7 +1892,7 @@ iso8601_bas_time(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, iso8601_bas_time_cb);
+    MATCH(str, pat, iso8601_bas_time_cb);
 }
 
 VALUE
@@ -1933,7 +1960,7 @@ rfc3339(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, rfc3339_cb);
+    MATCH(str, pat, rfc3339_cb);
 }
 
 VALUE
@@ -1997,7 +2024,7 @@ xmlschema_datetime(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, xmlschema_datetime_cb);
+    MATCH(str, pat, xmlschema_datetime_cb);
 }
 
 #undef SNUM
@@ -2038,7 +2065,7 @@ xmlschema_time(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, xmlschema_time_cb);
+    MATCH(str, pat, xmlschema_time_cb);
 }
 
 #undef SNUM
@@ -2079,7 +2106,7 @@ xmlschema_trunc(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, xmlschema_trunc_cb);
+    MATCH(str, pat, xmlschema_trunc_cb);
 }
 
 VALUE
@@ -2150,7 +2177,7 @@ rfc2822(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, rfc2822_cb);
+    MATCH(str, pat, rfc2822_cb);
 }
 
 VALUE
@@ -2208,7 +2235,7 @@ httpdate_type1(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, httpdate_type1_cb);
+    MATCH(str, pat, httpdate_type1_cb);
 }
 
 #undef SNUM
@@ -2255,7 +2282,7 @@ httpdate_type2(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, httpdate_type2_cb);
+    MATCH(str, pat, httpdate_type2_cb);
 }
 
 #undef SNUM
@@ -2296,7 +2323,7 @@ httpdate_type3(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, httpdate_type3_cb);
+    MATCH(str, pat, httpdate_type3_cb);
 }
 
 VALUE
@@ -2370,7 +2397,7 @@ jisx0301(VALUE str, VALUE hash)
     static VALUE pat = Qnil;
 
     REGCOMP_I(pat);
-    SUBS(str, pat, jisx0301_cb);
+    MATCH(str, pat, jisx0301_cb);
 }
 
 VALUE

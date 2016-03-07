@@ -20,6 +20,15 @@ module Test
       def self.test_order
         :sorted
       end
+
+      def self.method_added(name)
+        return unless name.to_s.start_with?("test_")
+        @test_methods ||= {}
+        if @test_methods[name]
+          warn "test/unit warning: method #{ self }##{ name } is redefined"
+        end
+        @test_methods[name] = true
+      end
     end
   end
 end

@@ -10,9 +10,13 @@
 **********************************************************************/
 
 #include "ruby/ruby.h"
+#include "ruby/thread.h"
 #include "ruby/util.h"
 #include "internal.h"
 
+#ifdef HAVE_STRINGS_H
+#include <strings.h>
+#endif
 #include <math.h>
 #include <float.h>
 #include <ctype.h>
@@ -101,7 +105,7 @@ rb_cmpint(VALUE val, VALUE a, VALUE b)
         if (l < 0) return -1;
         return 0;
     }
-    if (TYPE(val) == T_BIGNUM) {
+    if (RB_TYPE_P(val, T_BIGNUM)) {
 	if (BIGZEROP(val)) return 0;
 	if (RBIGNUM_SIGN(val)) return 1;
 	return -1;
@@ -269,7 +273,7 @@ bigfixize(VALUE x)
 static VALUE
 bignorm(VALUE x)
 {
-    if (!FIXNUM_P(x) && TYPE(x) == T_BIGNUM) {
+    if (RB_TYPE_P(x, T_BIGNUM)) {
 	x = bigfixize(bigtrunc(x));
     }
     return x;
@@ -349,6 +353,14 @@ rb_int2inum(SIGNED_VALUE n)
  * for each 0 <= i < num_longs.
  * So buf is little endian at whole on a little endian machine.
  * But buf is mixed endian on a big endian machine.
+ *
+ * The buf represents negative integers as two's complement.
+ * So, the most significant bit of the most significant word,
+ * (buf[num_longs-1]>>(SIZEOF_LONG*CHAR_BIT-1)),
+ * is the sign bit: 1 means negative and 0 means zero or positive.
+ *
+ * If given size of buf (num_longs) is not enough to represent val,
+ * higier words (including a sign bit) are ignored.
  */
 void
 rb_big_pack(VALUE val, unsigned long *buf, long num_longs)
@@ -391,7 +403,7 @@ rb_big_pack(VALUE val, unsigned long *buf, long num_longs)
     }
 }
 
-/* See rb_big_pack comment for endianness of buf. */
+/* See rb_big_pack comment for endianness and sign of buf. */
 VALUE
 rb_big_unpack(unsigned long *buf, long num_longs)
 {
@@ -722,7 +734,7 @@ rb_cstr_to_inum(const char *str, int base, int badcheck)
 		if (badcheck) goto bad;
 		break;
 	    }
-	    nondigit = c;
+	    nondigit = (char) c;
 	    continue;
 	}
 	else if ((c = conv_digit(c)) < 0) {
@@ -767,6 +779,7 @@ rb_str_to_inum(VALUE str, int base, int badcheck)
     VALUE ret;
 
     StringValue(str);
+    rb_must_asciicompat(str);
     if (badcheck) {
 	s = StringValueCStr(str);
     }
@@ -1026,7 +1039,8 @@ big2str_find_n1(VALUE x, int base)
 	bits = BITSPERDIG*RBIGNUM_LEN(x);
     }
 
-    return (long)ceil(bits/log_2[base - 2]);
+    /* @shyouhei note: vvvvvvvvvvvvv this cast is suspicious.  But I believe it is OK, because if that cast loses data, this x value is too big, and should have raised RangeError. */
+    return (long)ceil(((double)bits)/log_2[base - 2]);
 }
 
 static long
@@ -1210,10 +1224,11 @@ rb_big2ulong(VALUE x)
     VALUE num = big2ulong(x, "unsigned long", TRUE);
 
     if (!RBIGNUM_SIGN(x)) {
-	if ((long)num < 0) {
+	unsigned long v = (unsigned long)(-(long)num);
+
+	if (v <= LONG_MAX)
 	    rb_raise(rb_eRangeError, "bignum out of range of unsigned long");
-	}
-	return (VALUE)(-(SIGNED_VALUE)num);
+	return (VALUE)v;
     }
     return num;
 }
@@ -1256,8 +1271,14 @@ rb_big2ull(VALUE x)
 {
     unsigned LONG_LONG num = big2ull(x, "unsigned long long");
 
-    if (!RBIGNUM_SIGN(x))
-	return (VALUE)(-(SIGNED_VALUE)num);
+    if (!RBIGNUM_SIGN(x)) {
+	LONG_LONG v = -(LONG_LONG)num;
+
+	/* FIXNUM_MIN-1 .. LLONG_MIN mapped into 0xbfffffffffffffff .. LONG_MAX+1 */
+	if ((unsigned LONG_LONG)v <= LLONG_MAX)
+	    rb_raise(rb_eRangeError, "bignum out of range of unsigned long long");
+	return v;
+    }
     return num;
 }
 
@@ -1414,6 +1435,88 @@ rb_big_to_f(VALUE x)
     return DBL2NUM(rb_big2dbl(x));
 }
 
+VALUE
+rb_integer_float_cmp(VALUE x, VALUE y)
+{
+    double yd = RFLOAT_VALUE(y);
+    double yi, yf;
+    VALUE rel;
+
+    if (isnan(yd))
+        return Qnil;
+    if (isinf(yd)) {
+        if (yd > 0.0) return INT2FIX(-1);
+        else return INT2FIX(1);
+    }
+    yf = modf(yd, &yi);
+    if (FIXNUM_P(x)) {
+#if SIZEOF_LONG * CHAR_BIT < DBL_MANT_DIG /* assume FLT_RADIX == 2 */
+        double xd = (double)FIX2LONG(x);
+        if (xd < yd)
+            return INT2FIX(-1);
+        if (xd > yd)
+            return INT2FIX(1);
+        return INT2FIX(0);
+#else
+        long xl, yl;
+        if (yi < FIXNUM_MIN)
+            return INT2FIX(1);
+        if (FIXNUM_MAX+1 <= yi)
+            return INT2FIX(-1);
+        xl = FIX2LONG(x);
+        yl = (long)yi;
+        if (xl < yl)
+            return INT2FIX(-1);
+        if (xl > yl)
+            return INT2FIX(1);
+        if (yf < 0.0)
+            return INT2FIX(1);
+        if (0.0 < yf)
+            return INT2FIX(-1);
+        return INT2FIX(0);
+#endif
+    }
+    y = rb_dbl2big(yi);
+    rel = rb_big_cmp(x, y);
+    if (yf == 0.0 || rel != INT2FIX(0))
+        return rel;
+    if (yf < 0.0)
+        return INT2FIX(1);
+    return INT2FIX(-1);
+}
+
+VALUE
+rb_integer_float_eq(VALUE x, VALUE y)
+{
+    double yd = RFLOAT_VALUE(y);
+    double yi, yf;
+
+    if (isnan(yd) || isinf(yd))
+        return Qfalse;
+    yf = modf(yd, &yi);
+    if (yf != 0)
+        return Qfalse;
+    if (FIXNUM_P(x)) {
+#if SIZEOF_LONG * CHAR_BIT < DBL_MANT_DIG /* assume FLT_RADIX == 2 */
+        double xd = (double)FIX2LONG(x);
+        if (xd != yd)
+            return Qfalse;
+        return Qtrue;
+#else
+        long xl, yl;
+        if (yi < LONG_MIN || LONG_MAX < yi)
+            return Qfalse;
+        xl = FIX2LONG(x);
+        yl = (long)yi;
+        if (xl != yl)
+            return Qfalse;
+        return Qtrue;
+#endif
+    }
+    y = rb_dbl2big(yi);
+    return rb_big_eq(x, y);
+}
+
 /*
  *  call-seq:
  *     big <=> numeric   -> -1, 0, +1 or nil
@@ -1439,15 +1542,7 @@ rb_big_cmp(VALUE x, VALUE y)
 	break;
 
       case T_FLOAT:
-	{
-	    double a = RFLOAT_VALUE(y);
-
-	    if (isinf(a)) {
-		if (a > 0.0) return INT2FIX(-1);
-		else return INT2FIX(1);
-	    }
-	    return rb_dbl_cmp(rb_big2dbl(x), a);
-	}
+        return rb_integer_float_cmp(x, y);
 
       default:
 	return rb_num_coerce_cmp(x, y, rb_intern("<=>"));
@@ -1470,8 +1565,15 @@ rb_big_cmp(VALUE x, VALUE y)
 	    (RBIGNUM_SIGN(x) ? INT2FIX(-1) : INT2FIX(1));
 }
 
+enum big_op_t {
+    big_op_gt,
+    big_op_ge,
+    big_op_lt,
+    big_op_le
+};
+
 static VALUE
-big_op(VALUE x, VALUE y, int op)
+big_op(VALUE x, VALUE y, enum big_op_t op)
 {
     VALUE rel;
     int n;
@@ -1483,26 +1585,17 @@ big_op(VALUE x, VALUE y, int op)
 	break;
 
       case T_FLOAT:
-	{
-	    double a = RFLOAT_VALUE(y);
-
-	    if (isinf(a)) {
-		if (a > 0.0) rel = INT2FIX(-1);
-		else rel = INT2FIX(1);
-		break;
-	    }
-	    rel = rb_dbl_cmp(rb_big2dbl(x), a);
-	    break;
-	}
+        rel = rb_integer_float_cmp(x, y);
+        break;
 
       default:
 	{
 	    ID id = 0;
 	    switch (op) {
-		case 0: id = '>'; break;
-		case 1: id = rb_intern(">="); break;
-		case 2: id = '<'; break;
-		case 3: id = rb_intern("<="); break;
+		case big_op_gt: id = '>'; break;
+		case big_op_ge: id = rb_intern(">="); break;
+		case big_op_lt: id = '<'; break;
+		case big_op_le: id = rb_intern("<="); break;
 	    }
 	    return rb_num_coerce_relop(x, y, id);
 	}
@@ -1512,10 +1605,10 @@ big_op(VALUE x, VALUE y, int op)
     n = FIX2INT(rel);
 
     switch (op) {
-	case 0: return n >  0 ? Qtrue : Qfalse;
-	case 1: return n >= 0 ? Qtrue : Qfalse;
-	case 2: return n <  0 ? Qtrue : Qfalse;
-	case 3: return n <= 0 ? Qtrue : Qfalse;
+	case big_op_gt: return n >  0 ? Qtrue : Qfalse;
+	case big_op_ge: return n >= 0 ? Qtrue : Qfalse;
+	case big_op_lt: return n <  0 ? Qtrue : Qfalse;
+	case big_op_le: return n <= 0 ? Qtrue : Qfalse;
     }
     return Qundef;
 }
@@ -1531,7 +1624,7 @@ big_op(VALUE x, VALUE y, int op)
 static VALUE
 big_gt(VALUE x, VALUE y)
 {
-    return big_op(x, y, 0);
+    return big_op(x, y, big_op_gt);
 }
 
 /*
@@ -1545,7 +1638,7 @@ big_gt(VALUE x, VALUE y)
 static VALUE
 big_ge(VALUE x, VALUE y)
 {
-    return big_op(x, y, 1);
+    return big_op(x, y, big_op_ge);
 }
 
 /*
@@ -1559,7 +1652,7 @@ big_ge(VALUE x, VALUE y)
 static VALUE
 big_lt(VALUE x, VALUE y)
 {
-    return big_op(x, y, 2);
+    return big_op(x, y, big_op_lt);
 }
 
 /*
@@ -1573,7 +1666,7 @@ big_lt(VALUE x, VALUE y)
 static VALUE
 big_le(VALUE x, VALUE y)
 {
-    return big_op(x, y, 3);
+    return big_op(x, y, big_op_le);
 }
 
 /*
@@ -1597,14 +1690,7 @@ rb_big_eq(VALUE x, VALUE y)
       case T_BIGNUM:
 	break;
       case T_FLOAT:
-	{
-	    volatile double a, b;
-
-	    a = RFLOAT_VALUE(y);
-	    if (isnan(a) || isinf(a)) return Qfalse;
-	    b = rb_big2dbl(x);
-	    return (a == b)?Qtrue:Qfalse;
-	}
+        return rb_integer_float_eq(x, y);
       default:
 	return rb_equal(y, x);
     }
@@ -1628,7 +1714,7 @@ rb_big_eq(VALUE x, VALUE y)
 static VALUE
 rb_big_eql(VALUE x, VALUE y)
 {
-    if (TYPE(y) != T_BIGNUM) return Qfalse;
+    if (!RB_TYPE_P(y, T_BIGNUM)) return Qfalse;
     if (RBIGNUM_SIGN(x) != RBIGNUM_SIGN(y)) return Qfalse;
     if (RBIGNUM_LEN(x) != RBIGNUM_LEN(y)) return Qfalse;
     if (MEMCMP(BDIGITS(x),BDIGITS(y),BDIGIT,RBIGNUM_LEN(y)) != 0) return Qfalse;
@@ -1767,6 +1853,7 @@ bigsub_int(VALUE x, long y0)
     if (xn == 1 && num < 0) {
 	RBIGNUM_SET_SIGN(z, !RBIGNUM_SIGN(x));
 	zds[0] = (BDIGIT)-num;
+	RB_GC_GUARD(x);
 	return bignorm(z);
     }
     zds[0] = BIGLO(num);
@@ -1793,6 +1880,7 @@ bigsub_int(VALUE x, long y0)
     if (num < 0) {
 	z = bigsub(x, rb_int2big(y0));
     }
+    RB_GC_GUARD(x);
     return bignorm(z);
 }
 
@@ -1845,6 +1933,7 @@ bigadd_int(VALUE x, long y)
     while (i < zn) {
 	zds[i++] = 0;
     }
+    RB_GC_GUARD(x);
     return bignorm(z);
 }
 
@@ -2572,7 +2661,7 @@ struct big_div_struct {
     VALUE stop;
 };
 
-static VALUE
+static void *
 bigdivrem1(void *ptr)
 {
     struct big_div_struct *bds = (struct big_div_struct*)ptr;
@@ -2586,7 +2675,7 @@ bigdivrem1(void *ptr)
     j = nx==ny?nx+1:nx;
     for (nyzero = 0; !yds[nyzero]; nyzero++);
     do {
-	if (bds->stop) return Qnil;
+	if (bds->stop) return 0;
 	if (zds[j] ==  yds[ny-1]) q = (BDIGIT)BIGRAD-1;
 	else q = (BDIGIT)((BIGUP(zds[j]) + zds[j-1])/yds[ny-1]);
 	if (q) {
@@ -2614,7 +2703,7 @@ bigdivrem1(void *ptr)
 	}
 	zds[j] = q;
     } while (--j >= ny);
-    return Qnil;
+    return 0;
 }
 
 static void
@@ -2706,7 +2795,7 @@ bigdivrem(VALUE x, VALUE y, volatile VALUE *divp, volatile VALUE *modp)
     bds.yds = yds;
     bds.stop = Qfalse;
     if (nx > 10000 || ny > 10000) {
-	rb_thread_blocking_region(bigdivrem1, &bds, rb_big_stop, &bds.stop);
+	rb_thread_call_without_gvl(bigdivrem1, &bds, rb_big_stop, &bds.stop);
     }
     else {
 	bigdivrem1(&bds);
@@ -2771,12 +2860,13 @@ rb_big_divide(VALUE x, VALUE y, ID op)
 
       case T_FLOAT:
 	{
-	    double div = rb_big2dbl(x) / RFLOAT_VALUE(y);
 	    if (op == '/') {
-		return DBL2NUM(div);
+		return DBL2NUM(rb_big2dbl(x) / RFLOAT_VALUE(y));
 	    }
 	    else {
-		return rb_dbl2big(div);
+		double dy = RFLOAT_VALUE(y);
+		if (dy == 0.0) rb_num_zerodiv();
+		return rb_dbl2big(rb_big2dbl(x) / dy);
 	    }
 	}
 
@@ -2956,32 +3046,31 @@ big_fdiv(VALUE x, VALUE y)
     switch (TYPE(y)) {
       case T_FIXNUM:
 	y = rb_int2big(FIX2LONG(y));
-      case T_BIGNUM: {
+      case T_BIGNUM:
 	bigtrunc(y);
 	l = RBIGNUM_LEN(y) - 1;
 	ey = l * BITSPERDIG;
 	ey += bdigbitsize(BDIGITS(y)[l]);
 	ey -= DBL_BIGDIG * BITSPERDIG;
 	if (ey) y = big_shift(y, ey);
-      bignum:
-	bigdivrem(x, y, &z, 0);
-	l = ex - ey;
-#if SIZEOF_LONG > SIZEOF_INT
-	{
-	    /* Visual C++ can't be here */
-	    if (l > INT_MAX) return DBL2NUM(INFINITY);
-	    if (l < INT_MIN) return DBL2NUM(0.0);
-	}
-#endif
-	return DBL2NUM(ldexp(big2dbl(z), (int)l));
-      }
+	break;
       case T_FLOAT:
 	y = dbl2big(ldexp(frexp(RFLOAT_VALUE(y), &i), DBL_MANT_DIG));
 	ey = i - DBL_MANT_DIG;
-	goto bignum;
+	break;
+      default:
+	rb_bug("big_fdiv");
     }
-    rb_bug("big_fdiv");
-    /* NOTREACHED */
+    bigdivrem(x, y, &z, 0);
+    l = ex - ey;
+#if SIZEOF_LONG > SIZEOF_INT
+    {
+	/* Visual C++ can't be here */
+	if (l > INT_MAX) return DBL2NUM(INFINITY);
+	if (l < INT_MIN) return DBL2NUM(0.0);
+    }
+#endif
+    return DBL2NUM(ldexp(big2dbl(z), (int)l));
 }
 
 /*
@@ -3076,10 +3165,11 @@ rb_big_pow(VALUE x, VALUE y)
 	else {
 	    VALUE z = 0;
 	    SIGNED_VALUE mask;
-	    const long BIGLEN_LIMIT = 1024*1024 / SIZEOF_BDIGITS;
+	    const long xlen = RBIGNUM_LEN(x) - 1;
+	    const long xbits = ffs(RBIGNUM_DIGITS(x)[xlen]) + SIZEOF_BDIGITS*BITSPERDIG*xlen;
+	    const long BIGLEN_LIMIT = BITSPERDIG*1024*1024;
 
-	    if ((RBIGNUM_LEN(x) > BIGLEN_LIMIT) ||
-		(RBIGNUM_LEN(x) > BIGLEN_LIMIT / yy)) {
+	    if ((xbits > BIGLEN_LIMIT) || (xbits * yy > BIGLEN_LIMIT)) {
 		rb_warn("in a**b, b may be too big");
 		d = (double)yy;
 		break;
@@ -3104,10 +3194,10 @@ rb_big_pow(VALUE x, VALUE y)
 static inline VALUE
 bit_coerce(VALUE x)
 {
-    while (!FIXNUM_P(x) && TYPE(x) != T_BIGNUM) {
-	if (TYPE(x) == T_FLOAT) {
-	    rb_raise(rb_eTypeError, "can't convert Float into Integer");
-	}
+    while (!FIXNUM_P(x) && !RB_TYPE_P(x, T_BIGNUM)) {
+	rb_raise(rb_eTypeError,
+		 "can't convert %s into Integer for bitwise arithmetic",
+		 rb_obj_classname(x));
 	x = rb_to_int(x);
     }
     return x;
@@ -3431,7 +3521,7 @@ rb_big_lshift(VALUE x, VALUE y)
 	    }
 	    break;
 	}
-	else if (TYPE(y) == T_BIGNUM) {
+	else if (RB_TYPE_P(y, T_BIGNUM)) {
 	    if (!RBIGNUM_SIGN(y)) {
 		VALUE t = check_shiftdown(y, x);
 		if (!NIL_P(t)) return t;
@@ -3495,7 +3585,7 @@ rb_big_rshift(VALUE x, VALUE y)
 	    }
 	    break;
 	}
-	else if (TYPE(y) == T_BIGNUM) {
+	else if (RB_TYPE_P(y, T_BIGNUM)) {
 	    if (RBIGNUM_SIGN(y)) {
 		VALUE t = check_shiftdown(y, x);
 		if (!NIL_P(t)) return t;
@@ -3531,9 +3621,10 @@ big_rshift(VALUE x, unsigned long shift)
 	    return INT2FIX(-1);
     }
     if (!RBIGNUM_SIGN(x)) {
-	save_x = x = rb_big_clone(x);
+	x = rb_big_clone(x);
 	get2comp(x);
     }
+    save_x = x;
     xds = BDIGITS(x);
     i = RBIGNUM_LEN(x); j = i - s1;
     if (j == 0) {
@@ -3553,6 +3644,7 @@ big_rshift(VALUE x, unsigned long shift)
     if (!RBIGNUM_SIGN(x)) {
 	get2comp(z);
     }
+    RB_GC_GUARD(save_x);
     return z;
 }
 
@@ -3583,7 +3675,7 @@ rb_big_aref(VALUE x, VALUE y)
     VALUE shift;
     long i, s1, s2;
 
-    if (TYPE(y) == T_BIGNUM) {
+    if (RB_TYPE_P(y, T_BIGNUM)) {
 	if (!RBIGNUM_SIGN(y))
 	    return INT2FIX(0);
 	bigtrunc(y);
@@ -3641,17 +3733,13 @@ static VALUE
 rb_big_coerce(VALUE x, VALUE y)
 {
     if (FIXNUM_P(y)) {
-	return rb_assoc_new(rb_int2big(FIX2LONG(y)), x);
+	y = rb_int2big(FIX2LONG(y));
     }
-    else if (TYPE(y) == T_BIGNUM) {
-       return rb_assoc_new(y, x);
-    }
-    else {
+    else if (!RB_TYPE_P(y, T_BIGNUM)) {
 	rb_raise(rb_eTypeError, "can't coerce %s to Bignum",
 		 rb_obj_classname(y));
     }
-    /* not reached */
-    return Qnil;
+    return rb_assoc_new(y, x);
 }
 
 /*

@@ -34,17 +34,11 @@
 # [http://www2a.biglobe.ne.jp/~seki/ruby/druby.en.html]
 #    The English version of the dRuby home page.
 #
-# [http://www.chadfowler.com/ruby/drb.html]
-#    A quick tutorial introduction to using dRuby by Chad Fowler.
+# [http://pragprog.com/book/sidruby/the-druby-book]
+#    The dRuby Book: Distributed and Parallel Computing with Ruby
+#    by Masatoshi Seki and Makoto Inoue
 #
-# [http://www.linux-mag.com/2002-09/ruby_05.html]
-#   A tutorial introduction to dRuby in Linux Magazine by Dave Thomas.
-#   Includes a discussion of Rinda.
-#
-# [http://www.eng.cse.dmu.ac.uk/~hgs/ruby/dRuby/]
-#   Links to English-language Ruby material collected by Hugh Sasse.
-#
-# [http://www.rubycentral.com/book/ospace.html]
+# [http://www.ruby-doc.org/docs/ProgrammingRuby/html/ospace.html]
 #   The chapter from *Programming* *Ruby* by Dave Thomas and Andy Hunt
 #   which discusses dRuby.
 #
@@ -1341,6 +1335,7 @@ module DRb
 
       @protocol = DRbProtocol.open_server(uri, @config)
       @uri = @protocol.uri
+      @exported_uri = [@uri]
 
       @front = front
       @idconv = @config[:idconv]
@@ -1386,6 +1381,10 @@ module DRb
     # Is this server alive?
     def alive?
       @thread.alive?
+    end
+    
+    def here?(uri)
+      @exported_uri.include?(uri)
     end
 
     # Stop this server.
@@ -1570,6 +1569,10 @@ module DRb
         @grp.add Thread.current
         Thread.current['DRb'] = { 'client' => client ,
                                   'server' => self }
+        DRb.mutex.synchronize do
+          client_uri = client.uri
+          @exported_uri << client_uri unless @exported_uri.include?(client_uri)
+        end
         loop do
           begin
             succ = false
@@ -1666,7 +1669,8 @@ module DRb
 
   # Is +uri+ the URI for the current local server?
   def here?(uri)
-    (current_server.uri rescue nil) == uri
+    current_server.here?(uri) rescue false
+    # (current_server.uri rescue nil) == uri
   end
   module_function :here?
 
@@ -1758,6 +1762,7 @@ module DRb
   module_function :fetch_server
 end
 
+# :stopdoc:
 DRbObject = DRb::DRbObject
 DRbUndumped = DRb::DRbUndumped
 DRbIdConv = DRb::DRbIdConv

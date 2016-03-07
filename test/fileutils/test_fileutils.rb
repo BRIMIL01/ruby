@@ -325,6 +325,19 @@ class TestFileUtils
     assert_equal 'SLdest', File.readlink('tmp/cpr_dest2/symlink')
   end if have_symlink?
 
+  def test_cp_r_symlink_preserve
+    mkdir 'tmp/cross'
+    mkdir 'tmp/cross/a'
+    mkdir 'tmp/cross/b'
+    touch 'tmp/cross/a/f'
+    touch 'tmp/cross/b/f'
+    ln_s '../a/f', 'tmp/cross/b/l'
+    ln_s '../b/f', 'tmp/cross/a/l'
+    assert_nothing_raised {
+      cp_r 'tmp/cross', 'tmp/cross2', :preserve => true
+    }
+  end if have_symlink?
+
   def test_cp_r_pathname
     # pathname
     touch 'tmp/cprtmp'
@@ -913,8 +926,8 @@ class TestFileUtils
     # FreeBSD ufs and tmpfs don't allow to change sticky bit against
     # regular file. It's slightly strange. Anyway it's no effect bit.
     # see /usr/src/sys/ufs/ufs/ufs_chmod()
-    # NetBSD also denies it.
-    if /freebsd|netbsd/ !~ RUBY_PLATFORM
+    # NetBSD, OpenBSD and Solaris also denies it.
+    if /freebsd|netbsd|openbsd|solaris/ !~ RUBY_PLATFORM
       chmod "u+t,o+t", 'tmp/a'
       assert_equal 07500, File.stat('tmp/a').mode & 07777
       chmod "a-t,a-s", 'tmp/a'
@@ -1104,7 +1117,29 @@ class TestFileUtils
       uptodate? 'tmp/a', ['tmp/b', Pathname.new('tmp/c')]
       uptodate? Pathname.new('tmp/a'), [Pathname.new('tmp/b'), Pathname.new('tmp/c')]
     }
+    # [Bug #6708] [ruby-core:46256]
+    assert_raises_with_message(ArgumentError, "wrong number of arguments (3 for 2)") {
+      uptodate?('new',['old', 'oldest'], {})
+    }
   end
+
+  def assert_raises_with_message(klass, message)
+    begin
+      yield
+      flunk("Expected Exception #{klass} didn't raise")
+    rescue klass => ex
+      if message.kind_of? String
+        flag = !!(ex.message == message)
+        assert(flag, "Expected Exception(#{klass}) was raised, but the message doesn't match")
+      elsif message.kind_of? Regexp
+        flag = !!(ex.message =~ message)
+        assert(flag, "Expected Exception(#{klass}) was raised, but the message doesn't match")
+      else
+        raise
+      end
+    end
+  end
+  private :assert_raises_with_message
 
   def test_cd
     check_singleton :cd

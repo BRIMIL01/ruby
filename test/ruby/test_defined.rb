@@ -113,15 +113,43 @@ class TestDefined < Test::Unit::TestCase
     def a?
       defined?(A)
     end
+    def b?
+      defined?(A::B)
+    end
   end
 
   def test_autoloaded_noload
     loaded = $".dup
     $".clear
+    loadpath = $:.dup
+    $:.clear
     x = TestAutoloadedNoload.new
     assert_equal("constant", x.a?)
+    assert_nil(x.b?)
     assert_equal([], $")
   ensure
     $".replace(loaded)
+    $:.replace(loadpath)
+  end
+
+  def test_exception
+    bug5786 = '[ruby-dev:45021]'
+    assert_nil(defined?(raise("[Bug#5786]")::A), bug5786)
+  end
+
+  def test_define_method
+    bug6644 = '[ruby-core:45831]'
+    a = Class.new do
+      def self.def_f!;
+        singleton_class.send(:define_method, :f) { defined? super }
+      end
+    end
+    aa = Class.new(a)
+    a.def_f!
+    assert_nil(a.f)
+    assert_nil(aa.f)
+    aa.def_f!
+    assert_equal("super", aa.f, bug6644)
+    assert_nil(a.f, bug6644)
   end
 end

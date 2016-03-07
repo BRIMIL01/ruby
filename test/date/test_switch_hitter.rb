@@ -180,6 +180,75 @@ class TestSH < Test::Unit::TestCase
 		 [d.year, d.mon, d.mday, d.hour, d.min, d.sec, d.offset])
   end
 
+  def test_fractional
+    d = Date.jd(2451944.0)
+    assert_equal(2451944, d.jd)
+    d = Date.jd(Rational(2451944))
+    assert_equal(2451944, d.jd)
+    d = Date.jd(2451944.5)
+    assert_equal([2451944, 12], [d.jd, d.send('hour')])
+    d = Date.jd(Rational('2451944.5'))
+    assert_equal([2451944, 12], [d.jd, d.send('hour')])
+
+    d = Date.civil(2001, 2, 3.0)
+    assert_equal([2001, 2, 3], [d.year, d.mon, d.mday])
+    d = Date.civil(2001, 2, Rational(3))
+    assert_equal([2001, 2, 3], [d.year, d.mon, d.mday])
+    d = Date.civil(2001, 2, 3.5)
+    assert_equal([2001, 2, 3, 12], [d.year, d.mon, d.mday, d.send('hour')])
+    d = Date.civil(2001, 2, Rational('3.5'))
+    assert_equal([2001, 2, 3, 12], [d.year, d.mon, d.mday, d.send('hour')])
+
+    d = Date.ordinal(2001, 2.0)
+    assert_equal([2001, 2], [d.year, d.yday])
+    d = Date.ordinal(2001, Rational(2))
+    assert_equal([2001, 2], [d.year, d.yday])
+
+    d = Date.commercial(2001, 2, 3.0)
+    assert_equal([2001, 2, 3], [d.cwyear, d.cweek, d.cwday])
+    d = Date.commercial(2001, 2, Rational(3))
+    assert_equal([2001, 2, 3], [d.cwyear, d.cweek, d.cwday])
+
+    d = DateTime.jd(2451944.0)
+    assert_equal(2451944, d.jd)
+    d = DateTime.jd(Rational(2451944))
+    assert_equal(2451944, d.jd)
+    d = DateTime.jd(2451944.5)
+    assert_equal([2451944, 12], [d.jd, d.hour])
+    d = DateTime.jd(Rational('2451944.5'))
+    assert_equal([2451944, 12], [d.jd, d.hour])
+
+    d = DateTime.civil(2001, 2, 3.0)
+    assert_equal([2001, 2, 3], [d.year, d.mon, d.mday])
+    d = DateTime.civil(2001, 2, Rational(3))
+    assert_equal([2001, 2, 3], [d.year, d.mon, d.mday])
+    d = DateTime.civil(2001, 2, 3.5)
+    assert_equal([2001, 2, 3, 12], [d.year, d.mon, d.mday, d.hour])
+    d = DateTime.civil(2001, 2, Rational('3.5'))
+    assert_equal([2001, 2, 3, 12], [d.year, d.mon, d.mday, d.hour])
+    d = DateTime.civil(2001, 2, 3, 4.5)
+    assert_equal([2001, 2, 3, 4, 30], [d.year, d.mon, d.mday, d.hour, d.min])
+    d = DateTime.civil(2001, 2, 3, Rational('4.5'))
+    assert_equal([2001, 2, 3, 4, 30], [d.year, d.mon, d.mday, d.hour, d.min])
+    d = DateTime.civil(2001, 2, 3, 4, 5.5)
+    assert_equal([2001, 2, 3, 4, 5, 30],
+		 [d.year, d.mon, d.mday, d.hour, d.min, d.sec])
+    d = DateTime.civil(2001, 2, 3, 4, Rational('5.5'))
+    assert_equal([2001, 2, 3, 4, 5, 30],
+		 [d.year, d.mon, d.mday, d.hour, d.min, d.sec])
+
+    d = DateTime.ordinal(2001, 2.0)
+    assert_equal([2001, 2], [d.year, d.yday])
+    d = DateTime.ordinal(2001, Rational(2))
+    assert_equal([2001, 2], [d.year, d.yday])
+
+    d = DateTime.commercial(2001, 2, 3.0)
+    assert_equal([2001, 2, 3], [d.cwyear, d.cweek, d.cwday])
+    d = DateTime.commercial(2001, 2, Rational(3))
+    assert_equal([2001, 2, 3], [d.cwyear, d.cweek, d.cwday])
+
+  end
+
   def test_canon24oc
     d = DateTime.jd(2451943,24)
     assert_equal([2001, 2, 3, 0, 0, 0, 0],
@@ -216,6 +285,17 @@ class TestSH < Test::Unit::TestCase
     assert_equal(Encoding::US_ASCII, d.inspect.encoding)
     d = DateTime.new(2001, 2, 3)
     assert_equal(Encoding::US_ASCII, d.inspect.encoding)
+  end
+
+  def test_strftime
+    assert_raise(Errno::ERANGE) do
+      Date.today.strftime('%100000z')
+    end
+    assert_raise(Errno::ERANGE) do
+      Date.new(1 << 10000).strftime('%Y') 
+    end
+    assert_equal('-3786825600', Date.new(1850).strftime('%s'))
+    assert_equal('-3786825600000', Date.new(1850).strftime('%Q'))
   end
 
   def test_cmp
@@ -360,7 +440,73 @@ class TestSH < Test::Unit::TestCase
 		 [d2.year, d2.mon, d2.mday, d2.hour, d2.min, d2.sec, d.wday])
   end
 
-  def test_marshal
+  def period2_iter2(from, to, sg)
+    (from..to).each do |j|
+      d = Date.jd(j, sg)
+      d2 = Date.new(d.year, d.mon, d.mday, sg)
+      assert_equal(d2.jd, j)
+      assert_equal(d2.ajd, d.ajd)
+      assert_equal(d2.year, d.year)
+
+      d = DateTime.jd(j, 12,0,0, '+12:00', sg)
+      d2 = DateTime.new(d.year, d.mon, d.mday,
+			d.hour, d.min, d.sec, d.offset, sg)
+      assert_equal(d2.jd, j)
+      assert_equal(d2.ajd, d.ajd)
+      assert_equal(d2.year, d.year)
+    end
+  end
+
+  def period2_iter(from, to)
+    period2_iter2(from, to, Date::GREGORIAN)
+    period2_iter2(from, to, Date::ITALY)
+    period2_iter2(from, to, Date::ENGLAND)
+    period2_iter2(from, to, Date::JULIAN)
+  end
+
+  def test_period2
+    cm_period0 = 71149239
+    cm_period = 0xfffffff.div(cm_period0) * cm_period0
+    period2_iter(-cm_period * (1 << 64) - 3, -cm_period * (1 << 64) + 3)
+    period2_iter(-cm_period - 3, -cm_period + 3)
+    period2_iter(0 - 3, 0 + 3)
+    period2_iter(+cm_period - 3, +cm_period + 3)
+    period2_iter(+cm_period * (1 << 64) - 3, +cm_period * (1 << 64) + 3)
+  end
+
+=begin
+  def test_marshal14
+    s = "\x04\x03u:\x01\x04Date\x01\v\x04\x03[\x01\x02i\x03\xE8i%T"
+    d = Marshal.load(s)
+    assert_equal(Rational(4903887,2), d.ajd)
+    assert_equal(0, d.send(:offset))
+    assert_equal(Date::GREGORIAN, d.start)
+  end
+
+  def test_marshal16
+    s = "\x04\x06u:\tDate\x0F\x04\x06[\ai\x03\xE8i%T"
+    d = Marshal.load(s)
+    assert_equal(Rational(4903887,2), d.ajd)
+    assert_equal(0, d.send(:offset))
+    assert_equal(Date::GREGORIAN, d.start)
+  end
+
+  def test_marshal18
+    s = "\x04\bu:\tDateP\x04\b[\bo:\rRational\a:\x0F@numeratori\x03\xCF\xD3J:\x11@denominatori\ai\x00o:\x13Date::Infinity\x06:\a@di\xFA"
+    d = Marshal.load(s)
+    assert_equal(Rational(4903887,2), d.ajd)
+    assert_equal(0, d.send(:offset))
+    assert_equal(Date::GREGORIAN, d.start)
+
+    s = "\x04\bu:\rDateTime`\x04\b[\bo:\rRational\a:\x0F@numeratorl+\b\xC9\xB0\x81\xBD\x02\x00:\x11@denominatori\x02\xC0\x12o;\x00\a;\x06i\b;\ai\ro:\x13Date::Infinity\x06:\a@di\xFA"
+    d = Marshal.load(s)
+    assert_equal(Rational(11769327817,4800), d.ajd)
+    assert_equal(Rational(9,24), d.offset)
+    assert_equal(Date::GREGORIAN, d.start)
+  end
+=end
+
+  def test_marshal192
     s = "\x04\bU:\tDate[\bU:\rRational[\ai\x03\xCF\xD3Ji\ai\x00o:\x13Date::Infinity\x06:\a@di\xFA"
     d = Marshal.load(s)
     assert_equal(Rational(4903887,2), d.ajd)
